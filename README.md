@@ -25,15 +25,3 @@ Local development / run
    node server.js
 4. Open the app in your browser:
    http://localhost:3000
-
-Notes
-- Stories content is intentionally git-ignored: see `.gitignore` which excludes `/stories/*` but allows keeping a `.gitkeep` placeholder.
-- The app uses a fallback markdown renderer if the `marked` library cannot be loaded (useful offline or behind restrictive CSP).
-- If you plan to push this repo to GitHub and want to include an empty `stories/` folder, add `stories/.gitkeep`.
-
-Contributing
-- Open an issue or submit a PR to the repository.
-- Keep user story content out of commits; test data should be placed outside `stories/` or in a temporary branch.
-
-License
-- Unspecified — add a LICENSE file if you want to publish with a specific license.
