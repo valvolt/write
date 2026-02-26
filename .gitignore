@@ -1,0 +1,20 @@
+# Ignore story content (keep repository free of user story data)
+/stories/*
+!/stories/.gitkeep
+
+# Node / build / editor
+node_modules/
+dist/
+build/
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# Env / secrets
+.env
+
+# Logs
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*

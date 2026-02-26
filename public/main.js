@@ -1,0 +1,969 @@
+ // Story Writer - frontend (clean, working vanilla JS)
+ console.log('[debug] main.js loaded');
+
+// --- API helpers ---
+const api = {
+  listStories: () => fetch('/api/stories').then(r => r.json()),
+  createStory: (name) => fetch('/api/stories', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ name })
+  }).then(r => r.json()),
+  getStory: (name) => fetch(`/api/stories/${encodeURIComponent(name)}`).then(r => r.json()),
+  saveFile: (name, file, content) => fetch(`/api/stories/${encodeURIComponent(name)}/save`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ file, content })
+  }).then(r => r.json()),
+  renameStory: (name, newName) => fetch(`/api/stories/${encodeURIComponent(name)}/rename`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ newName })
+  }).then(r => r.json()),
+  uploadImage: (name, type, file) => {
+    const fd = new FormData();
+    fd.append('file', file);
+    fd.append('type', type);
+    return fetch(`/api/stories/${encodeURIComponent(name)}/images`, { method: 'POST', body: fd }).then(r => r.json());
+  }
+};
+
+// --- state ---
+const state = {
+  currentStory: null,
+  storyData: null, // result of GET /api/stories/:name
+  // currentView indicates what the editor is showing:
+  // { type: 'text'|'characters'|'locations', name?: string }
+  currentView: { type: 'text', name: null }
+};
+// autosave timer handle (debounced saves while typing)
+let autosaveTimer = null;
+
+// --- DOM helpers ---
+const $ = (s) => document.querySelector(s);
+const $$ = (s) => Array.from(document.querySelectorAll(s));
+
+// --- element refs ---
+const storyList = $('#storyList');
+const createStoryBtn = $('#createStoryBtn');
+const newStoryName = $('#newStoryName');
+const currentStoryTitle = $('#currentStoryTitle');
+const editor = $('#editor');
+const preview = $('#preview');
+const saveBtn = $('#saveBtn');
+const renameInput = $('#renameInput');
+const renameBtn = $('#renameBtn');
+const closeStoryBtn = $('#closeStoryBtn');
+const imageUpload = $('#imageUpload');
+const uploadBtn = $('#uploadBtn');
+const uploadType = $('#uploadType');
+
+const characterList = $('#characterList');
+const locationList = $('#locationList');
+const charSort = $('#charSort');
+const locSort = $('#locSort');
+// hide the save button — we autosave on input so the button is now optional
+if (saveBtn) saveBtn.style.display = 'none';
+
+const entityModal = $('#entityModal');
+const entityModalTitle = $('#entityModalTitle');
+const entityContent = $('#entityContent');
+const entityImageInput = $('#entityImageInput');
+const saveEntityBtn = $('#saveEntityBtn');
+const closeEntityBtn = $('#closeEntityBtn');
+
+function setEditorEnabled(enabled) {
+  // enable/disable the main editor and adjust preview/save controls
+  try {
+    if (!editor) return;
+    editor.disabled = !enabled;
+    if (enabled) {
+      editor.classList.remove('disabled');
+      editor.placeholder = editor.placeholder && editor.placeholder === 'No story opened' ? 'Write your story here...' : editor.placeholder;
+    } else {
+      editor.classList.add('disabled');
+      editor.placeholder = 'No story opened';
+      // clear preview when disabled
+      if (preview) preview.innerHTML = '';
+    }
+    if (saveBtn) saveBtn.disabled = !enabled;
+  } catch (e) {
+    console.warn('setEditorEnabled error', e);
+  }
+}
+
+// custom context menu element ref
+let customContextEl = null;
+
+// tooltip element
+let tooltipEl = null;
+
+// currently editing entity info
+let currentEditing = { type: null, name: null };
+let lastEditorSelection = null; // saved when user opens editor context menu
+let uploadContext = null; // { mode: 'editor'|'entity', type: 'text'|'characters'|'locations', name?, start?, end? }
+
+/* global hidden file input handler (used by right-click upload actions) */
+const globalFileInput = document.getElementById('globalHiddenFileInput');
+if (globalFileInput) {
+  globalFileInput.addEventListener('change', async (e) => {
+    const file = e.target.files[0];
+    if (!file || !uploadContext) return;
+    const ctx = uploadContext;
+    uploadContext = null;
+    globalFileInput.value = '';
+    if (!state.currentStory) return alert('Open a story first');
+    try {
+      const type = ctx.type || 'text';
+      const res = await api.uploadImage(state.currentStory, type, file);
+      if (!res || !res.ok) return alert(res && res.error ? res.error : 'Upload failed');
+      const url = res.url;
+      if (ctx.mode === 'editor') {
+        // insert markdown image at saved selection
+        const s = (typeof ctx.start === 'number') ? ctx.start : editor.selectionStart;
+        const epos = (typeof ctx.end === 'number') ? ctx.end : editor.selectionEnd;
+        const before = editor.value.slice(0, s);
+        const after = editor.value.slice(epos);
+        const md = `![${file.name}](${url})`;
+        editor.value = before + md + after;
+        renderPreview();
+      } else if (ctx.mode === 'entity') {
+        // append image markdown to section (characters.md / locations.md)
+        const filename = ctx.type === 'characters' ? 'characters.md' : 'locations.md';
+        const raw = state.storyData[ctx.type] || '';
+        const sections = parseEntitySections(raw);
+        const entry = sections[ctx.name] || { title: ctx.name, desc: '' };
+        entry.desc = (entry.desc ? entry.desc + '\n\n' : '') + `![${file.name}](${url})`;
+        sections[ctx.name] = entry;
+        const newContent = Object.values(sections).map(s => composeSection(s.title, s.desc)).join('\n\n');
+        const saveRes = await api.saveFile(state.currentStory, filename, newContent);
+        if (!saveRes || !saveRes.ok) return alert(saveRes && saveRes.error ? saveRes.error : 'Save failed');
+        const updated = await api.getStory(state.currentStory);
+        if (updated && updated.ok) state.storyData = updated;
+        renderPreview();
+      }
+    } catch (err) {
+      console.error('upload handler error', err);
+      alert('Upload failed');
+ }
+  });
+}
+
+// --- utilities ---
+function escapeRegExp(s) {
+  return s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+}
+
+// parse entities markdown into map Name -> {title, desc}
+// expects sections like "## Name\n\nDescription..."
+function parseEntitySections(raw) {
+  if (!raw || !raw.trim()) return {};
+  // split on headings starting with "## "
+  const parts = raw.split(/\n(?=##\s+)/g).map(p => p.trim()).filter(Boolean);
+  const map = {};
+  for (const p of parts) {
+    const lines = p.split('\n').map(l => l.trim()).filter(Boolean);
+    if (lines.length === 0) continue;
+    const title = lines[0].replace(/^#{1,6}\s*/, '').trim();
+    const desc = lines.slice(1).join('\n').trim();
+    if (title) map[title] = { title, desc, raw: p };
+  }
+  return map;
+}
+
+function composeSection(title, desc) {
+  return `## ${title}\n\n${desc || ''}`.trim();
+}
+
+/*
+  parseEntitySectionsArray(raw) -> preserves order and returns an array of section objects:
+  [{ title, desc, raw }]
+  This is safer for merging edits because it preserves other sections and their order.
+*/
+function parseEntitySectionsArray(raw) {
+  if (!raw || !raw.trim()) return [];
+  const parts = raw.split(/\n(?=##\s+)/g).map(p => p.trim()).filter(Boolean);
+  const arr = [];
+  for (const p of parts) {
+    const lines = p.split('\n');
+    if (lines.length === 0) continue;
+    const titleLine = lines[0].trim();
+    const title = titleLine.replace(/^#{1,6}\s*/, '').trim();
+    const desc = lines.slice(1).join('\n').trim();
+    if (title) arr.push({ title, desc, raw: p });
+  }
+  return arr;
+}
+
+/* Minimal fallback markdown -> HTML renderer used when marked is unavailable or fails.
+   Supports headings (#), bold/italic, images, inline code, and simple lists and paragraphs — enough for live preview. */
+function simpleMarkdownToHtml(md) {
+  if (!md) return '';
+  const lines = md.split(/\r?\n/);
+  let html = '';
+  let inList = false;
+
+  function escapeHtml(s) {
+    return String(s)
+      .replace(/&/g, '&')
+      .replace(/</g, '<')
+      .replace(/>/g, '>');
+  }
+
+  for (let line of lines) {
+    const raw = line;
+    line = escapeHtml(line);
+
+    // headings
+    // strip possible BOM/zero-width characters that sometimes sneak into files,
+    // then match 1-6 leading '#' followed by at least one space and the heading text.
+    const cleaned = raw.replace(/^[\uFEFF\u200B]+/, '');
+    const h = cleaned.match(/^(#{1,6})\s+(.*)$/);
+    if (h) {
+      // debug log to help diagnose malformed heading inputs (will show exact raw line)
+      try { console.log('[debug] simpleMarkdownToHtml: heading match ->', JSON.stringify(cleaned), 'level=', h[1].length, 'text=', JSON.stringify(h[2])); } catch (e) {}
+      if (inList) { html += '</ul>'; inList = false; }
+      const level = h[1].length;
+      // sanitize heading text: if the captured heading text still starts with stray hashes or spaces
+      // (for example due to accidental normalization earlier producing "# # test"), remove those.
+      const headingText = (h[2] || '').replace(/^[#\s]+/, '');
+      html += `<h${level}>${escapeHtml(headingText)}</h${level}>`;
+      continue;
+    }
+
+    // list items
+    const li = raw.match(/^\s*[-*]\s+(.*)/);
+    if (li) {
+      if (!inList) { html += '<ul>'; inList = true; }
+      let content = escapeHtml(li[1]);
+
+      // process inline elements inside list item
+      content = content.replace(/!\[([^\]]*)\]\(([^)]+)\)/g, (_m, alt, url) => {
+        return `<img src="${escapeHtml(url)}" alt="${escapeHtml(alt)}" />`;
+      });
+      content = content.replace(/`([^`]+)`/g, '<code>$1</code>');
+      content = content.replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>');
+      content = content.replace(/\*(.+?)\*/g, '<em>$1</em>');
+
+      html += `<li>${content}</li>`;
+      continue;
+    } else {
+      if (inList) { html += '</ul>'; inList = false; }
+    }
+
+    // images on their own line or inline
+    // inline image syntax: ![alt](url)
+    let content = escapeHtml(raw)
+      .replace(/!\[([^\]]*)\]\(([^)]+)\)/g, (_m, alt, url) => {
+        return `<img src="${escapeHtml(url)}" alt="${escapeHtml(alt)}" />`;
+      });
+
+    // inline code, bold, italic
+    content = content.replace(/`([^`]+)`/g, '<code>$1</code>');
+    content = content.replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>');
+    content = content.replace(/\*(.+?)\*/g, '<em>$1</em>');
+
+    if (content.trim() === '') {
+      // blank line — keep as separator
+      html += '';
+    } else {
+      html += `<p>${content}</p>`;
+    }
+  }
+
+  if (inList) html += '</ul>';
+  return html;
+}
+
+function countOccurrences(text, name) {
+  // guard: name required
+  if (!name) return 0;
+  // coerce non-strings to safe string values (defensive: avoids .match TypeError)
+  if (typeof text !== 'string') text = String(text || '');
+  if (!text) return 0;
+  const re = new RegExp(`\\b${escapeRegExp(name)}\\b`, 'gi');
+  const m = text.match(re);
+  return m ? m.length : 0;
+}
+
+// --- Story listing and CRUD UI ---
+async function refreshStories() {
+  const res = await api.listStories();
+  if (!res || !res.ok) return;
+  storyList.innerHTML = '';
+  for (const s of res.stories) {
+    const li = document.createElement('li');
+    li.textContent = s;
+    li.dataset.name = s;
+    li.addEventListener('click', () => openStory(s));
+    storyList.appendChild(li);
+  }
+}
+
+createStoryBtn.addEventListener('click', async () => {
+  const name = (newStoryName.value || '').trim();
+  if (!name) return alert('Enter a story name');
+  const res = await api.createStory(name);
+  if (!res || !res.ok) return alert(res && res.error ? res.error : 'Create failed');
+  newStoryName.value = '';
+  await refreshStories();
+  openStory(res.name);
+});
+
+/* Inline rename handled by clicking the title (currentStoryTitle). Sidebar rename removed. */
+currentStoryTitle.addEventListener('click', () => {
+  if (!state.currentStory) return;
+  currentStoryTitle.contentEditable = 'true';
+  currentStoryTitle.focus();
+});
+currentStoryTitle.addEventListener('keydown', async (e) => {
+  if (e.key === 'Enter') { e.preventDefault(); currentStoryTitle.blur(); }
+  else if (e.key === 'Escape') {
+    currentStoryTitle.contentEditable = 'false';
+    if (state.currentStory) currentStoryTitle.textContent = state.currentStory;
+  }
+});
+currentStoryTitle.addEventListener('blur', async () => {
+  if (!currentStoryTitle.isContentEditable) return;
+  currentStoryTitle.contentEditable = 'false';
+  const newName = (currentStoryTitle.textContent || '').trim();
+  if (!newName || newName === state.currentStory) {
+    currentStoryTitle.textContent = state.currentStory || 'No story opened';
+    return;
+  }
+  const res = await api.renameStory(state.currentStory, newName);
+  if (!res || !res.ok) {
+    alert(res && res.error ? res.error : 'Rename failed');
+    currentStoryTitle.textContent = state.currentStory;
+    return;
+  }
+  await refreshStories();
+  openStory(res.name);
+});
+
+closeStoryBtn.addEventListener('click', () => {
+  state.currentStory = null;
+  state.storyData = null;
+  currentStoryTitle.textContent = 'No story opened';
+  editor.value = '';
+  characterList.innerHTML = '';
+  locationList.innerHTML = '';
+  // disable editor area when no story is open
+  setEditorEnabled(false);
+});
+
+// --- Open / Save story ---
+async function openStory(name) {
+  const res = await api.getStory(name);
+  if (!res || !res.ok) {
+    alert(res && res.error ? res.error : 'Failed to open story');
+    return;
+  }
+  state.currentStory = name;
+  state.storyData = res;
+  // reset view to main story text when opening a story
+  state.currentView = { type: 'text', name: null };
+  currentStoryTitle.textContent = name;
+  // enable editor area now that a story is open
+  setEditorEnabled(true);
+  editor.value = res.text || '';
+  renderPreview();
+  refreshEntityLists();
+}
+
+saveBtn.addEventListener('click', saveMainText);
+
+async function saveMainText() {
+  if (!state.currentStory) return;
+  // determine which file we're saving to
+  const view = state.currentView && state.currentView.type ? state.currentView.type : 'text';
+  if (view === 'text') {
+    // saving main story text (replace entire text.md)
+    const content = editor.value;
+    const res = await api.saveFile(state.currentStory, 'text.md', content);
+    if (!res || !res.ok) {
+      console.warn('saveMainText: failed to save text.md', res && res.error);
+      return;
+    }
+    const updated = await api.getStory(state.currentStory);
+    if (updated && updated.ok) state.storyData = updated;
+    refreshEntityLists();
+    console.log('Saved text.md');
+    return;
+  }
+
+  // saving an entity (characters.md or locations.md) — merge edited section into the existing file (preserving other sections)
+  const filename = view === 'characters' ? 'characters.md' : 'locations.md';
+  const raw = (state.storyData && state.storyData[view]) ? state.storyData[view] : '';
+  const arr = parseEntitySectionsArray(raw);
+
+  // parse the editor content which should be in the form "## Name\n\nDescription..."
+  const editedRaw = (editor.value || '').trim();
+  const lines = editedRaw.split(/\r?\n/);
+  let editedTitle = state.currentView && state.currentView.name ? state.currentView.name : null;
+  let editedDesc = '';
+
+  if (lines.length > 0 && lines[0].match(/^#{1,6}\s+/)) {
+    editedTitle = lines[0].replace(/^#{1,6}\s+/, '').trim();
+    editedDesc = lines.slice(1).join('\n').trim();
+  } else {
+    // no explicit heading — treat entire content as description
+    editedDesc = editedRaw;
+  }
+
+  if (!editedTitle) {
+    console.warn('saveMainText: cannot determine entity title; aborting save');
+    return;
+  }
+
+  // find index by original name (supports renames), otherwise by title, otherwise append
+  let idx = -1;
+  if (state.currentView && state.currentView.name) {
+    idx = arr.findIndex(s => s.title === state.currentView.name);
+  }
+  if (idx === -1) {
+    idx = arr.findIndex(s => s.title === editedTitle);
+  }
+  if (idx === -1) {
+    // append new section
+    arr.push({ title: editedTitle, desc: editedDesc });
+  } else {
+    // replace existing section
+    arr[idx] = { title: editedTitle, desc: editedDesc };
+  }
+
+  // ensure unique titles (if a rename collided with another section, merge by keeping the edited one and removing duplicates)
+  const seen = new Set();
+  const merged = [];
+  for (const s of arr) {
+    if (seen.has(s.title)) continue;
+    seen.add(s.title);
+    merged.push(s);
+  }
+
+  const newContent = merged.map(s => composeSection(s.title, s.desc)).join('\n\n');
+  const res = await api.saveFile(state.currentStory, filename, newContent);
+  if (!res || !res.ok) {
+    console.warn('saveMainText: failed to save', filename, res && res.error);
+    return;
+  }
+
+  // refresh story data and keep the same entity open (use canonical title)
+  const updated = await api.getStory(state.currentStory);
+  if (updated && updated.ok) {
+    state.storyData = updated;
+    const latestArr = parseEntitySectionsArray(state.storyData[view] || '');
+    const entry = latestArr.find(s => s.title === editedTitle) || { title: editedTitle, desc: editedDesc };
+    state.currentView = { type: view, name: entry.title };
+    editor.value = composeSection(entry.title, entry.desc);
+  }
+  refreshEntityLists();
+  console.log('Saved', filename, 'and kept editing', editedTitle);
+}
+
+function scheduleAutoSave(delay = 500) {
+  if (autosaveTimer) clearTimeout(autosaveTimer);
+  autosaveTimer = setTimeout(() => {
+    try { saveMainText(); } catch (e) { console.warn('autosave failed', e); }
+  }, delay);
+}
+
+// Ctrl/Cmd+S
+document.addEventListener('keydown', (e) => {
+  if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 's') {
+    e.preventDefault();
+    saveMainText();
+  }
+});
+
+/* Image upload via sidebar has been replaced by right-click upload (globalHiddenFileInput). */
+
+ // --- Entities lists and counts ---
+ function refreshEntityLists(mainTextOverride) {
+   // If someone accidentally passed a non-string (e.g. Event) as the handler arg, ignore it.
+   if (mainTextOverride && typeof mainTextOverride !== 'string') mainTextOverride = undefined;
+   // If no story is opened and no override provided, nothing to do.
+   if (!state.storyData && typeof mainTextOverride === 'undefined') return;
+   // Determine the main text to count occurrences in:
+   // - If caller provided an override (e.g. while typing in main text), use it.
+   // - Otherwise use the stored story main text from state.storyData.
+   const mainText = (typeof mainTextOverride !== 'undefined') ? mainTextOverride : ((state.storyData && state.storyData.text) ? state.storyData.text : '');
+   const chars = parseEntitySections(state.storyData && state.storyData.characters ? state.storyData.characters : '');
+   const locs = parseEntitySections(state.storyData && state.storyData.locations ? state.storyData.locations : '');
+   const text = mainText || '';
+
+  const charArr = Object.keys(chars).map(n => ({ name: n, count: countOccurrences(text, n) }));
+  const locArr = Object.keys(locs).map(n => ({ name: n, count: countOccurrences(text, n) }));
+
+  function renderList(arr, container, type, sortMode) {
+    if (sortMode === 'alpha') arr.sort((a, b) => a.name.localeCompare(b.name));
+    else arr.sort((a, b) => b.count - a.count || a.name.localeCompare(b.name));
+    container.innerHTML = '';
+    for (const item of arr) {
+      const li = document.createElement('li');
+      li.innerHTML = `${item.name} <span class="small">(${item.count})</span>`;
+      // open the entity in the main editor (left/center) and render in the preview (right)
+      li.addEventListener('click', () => openEntityInEditor(type, item.name));
+      container.appendChild(li);
+    }
+  }
+
+  renderList(charArr, characterList, 'characters', charSort.value || 'alpha');
+  renderList(locArr, locationList, 'locations', locSort.value || 'alpha');
+
+  // re-render preview to refresh highlights
+  renderPreview();
+}
+
+ // sort change handlers
+ charSort.addEventListener('change', () => refreshEntityLists());
+ locSort.addEventListener('change', () => refreshEntityLists());
+
+/* Improved preview rendering: render markdown then wrap ALL entity occurrences (multi-match, multi-word, longest-first).
+   NOTE: renderPreview now renders markdown even when no story is opened so the right pane always shows live preview. */
+function renderPreview() {
+  try {
+    const md = editor.value || '';
+    console.log('[debug] renderPreview invoked, md length=', md.length);
+    // log whether marked is present so we can diagnose why headings are not being converted
+    try { console.log('[debug] typeof marked =', typeof marked); } catch (e) { console.warn('cannot log marked type', e); }
+    // Use marked when available; otherwise fall back to the simple renderer.
+    // If marked isn't present, attempt to load it dynamically once and retry rendering.
+    let html = '';
+    if (typeof marked !== 'undefined' && marked && typeof marked.parse === 'function') {
+      try {
+        html = marked.parse(md || '');
+      } catch (err) {
+        console.warn('marked.parse failed, falling back to simple renderer', err);
+        html = simpleMarkdownToHtml(md || '');
+      }
+    } else {
+      // Try to load marked dynamically (only once). When it finishes loading we'll re-run renderPreview.
+      if (!window._markedLoading && !window._markedTriedToLoad) {
+        window._markedLoading = true;
+        window._markedTriedToLoad = true;
+        console.log('[debug] marked not found — injecting script to load marked from CDN');
+        const s = document.createElement('script');
+        s.src = 'https://unpkg.com/marked@4.4.12/marked.min.js';
+        s.async = true;
+        s.onload = () => {
+          window._markedLoading = false;
+          console.log('[debug] marked loaded dynamically; re-rendering preview');
+          try { renderPreview(); } catch (e) { console.warn('re-render after marked load failed', e); }
+        };
+        s.onerror = () => {
+          window._markedLoading = false;
+          console.warn('Failed to load marked from CDN; continuing with fallback renderer');
+        };
+        document.head.appendChild(s);
+      } else {
+        console.warn('marked not available, using simpleMarkdownToHtml fallback');
+      }
+      html = simpleMarkdownToHtml(md || '');
+    }
+    // debug: log the actual HTML we will inject so we can inspect why headings appear as literal text
+    try {
+      console.log('[debug] rendered HTML preview (first 1000 chars):', (html || '').slice(0, 1000));
+    } catch (e) {
+      console.warn('Could not log rendered HTML', e);
+    }
+    // try to set the rendered HTML. If for some reason it doesn't render (zero child nodes),
+    // fall back to showing the raw HTML as text so we can see what's produced.
+    preview.innerHTML = html || '<div class="empty-preview">[preview empty]</div>';
+    // if no nodes got inserted (some browsers / HTML combinations could cause empty rendering),
+    // show raw HTML so user can debug, and add a small debug attribute.
+    if (!preview.childNodes || preview.childNodes.length === 0) {
+      preview.textContent = html || '[no output]';
+      preview.setAttribute('data-render-debug', 'raw-text-fallback');
+    } else {
+      preview.removeAttribute('data-render-debug');
+    }
+    console.log('[debug] preview rendered, html length=', (html || '').length, 'childNodes=', preview.childNodes.length, 'data-render-debug=', preview.getAttribute('data-render-debug'));
+
+    // derive entities from state if available, otherwise empty lists
+    const chars = Object.keys(parseEntitySections((state.storyData && state.storyData.characters) || ''));
+    const locs = Object.keys(parseEntitySections((state.storyData && state.storyData.locations) || ''));
+
+    // build combined list (characters first) and sort by length desc to prefer longest match
+    const combined = chars.map(n => ({ name: n, cls: 'entity-char' }))
+      .concat(locs.map(n => ({ name: n, cls: 'entity-loc' })))
+      .sort((a, b) => b.name.length - a.name.length);
+
+    // if there are no entities defined yet, still show rendered markdown but skip highlighting
+    // (don't return early — highlight loop below will be skipped when combined is empty)
+    // if (combined.length === 0) {
+    //   // nothing to highlight
+    //   return;
+    // }
+
+    // walk text nodes and replace all non-overlapping matches found for combined names
+    walkTextNodes(preview, (textNode) => {
+      const parent = textNode.parentNode;
+      const txt = textNode.nodeValue;
+      if (!txt || !txt.trim()) return;
+
+      // collect matches across all entity names
+      const matches = [];
+      for (const item of combined) {
+        const re = new RegExp(`\\b${escapeRegExp(item.name)}\\b`, 'gi');
+        let m;
+        while ((m = re.exec(txt)) !== null) {
+          matches.push({ index: m.index, text: m[0], name: item.name, cls: item.cls, length: m[0].length });
+        }
+      }
+      if (matches.length === 0) return;
+
+      // sort matches by index and filter overlaps (keep earliest, then skip overlaps)
+      matches.sort((a, b) => a.index - b.index || b.length - a.length);
+      const filtered = [];
+      let lastEnd = -1;
+      for (const mt of matches) {
+        if (mt.index >= lastEnd) {
+          filtered.push(mt);
+          lastEnd = mt.index + mt.length;
+        }
+      }
+
+      // build fragment
+      const frag = document.createDocumentFragment();
+      let cursor = 0;
+      for (const mt of filtered) {
+        if (mt.index > cursor) {
+          frag.appendChild(document.createTextNode(txt.slice(cursor, mt.index)));
+        }
+        const a = document.createElement('a');
+        a.className = mt.cls;
+        a.textContent = mt.text;
+        a.href = 'javascript:void(0)';
+        a.dataset.entityName = mt.name;
+        a.dataset.entityType = mt.cls === 'entity-char' ? 'characters' : 'locations';
+        frag.appendChild(a);
+        cursor = mt.index + mt.length;
+      }
+      if (cursor < txt.length) frag.appendChild(document.createTextNode(txt.slice(cursor)));
+      parent.replaceChild(frag, textNode);
+    });
+
+    // attach hover and click handlers
+    preview.querySelectorAll('a.entity-char, a.entity-loc').forEach(a => {
+      a.addEventListener('mouseover', onEntityHover);
+      a.addEventListener('mouseout', onEntityOut);
+      a.addEventListener('click', (ev) => {
+        const name = a.dataset.entityName;
+        const type = a.dataset.entityType;
+        // open entity inline in main editor
+        openEntityEditor(type, name);
+      });
+    });
+  } catch (err) {
+    console.error('renderPreview error', err);
+  }
+}
+
+// walk text nodes helper (skip tags where we shouldn't change content)
+function walkTextNodes(root, cb) {
+  const walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT, {
+    acceptNode(node) {
+      if (!node.nodeValue || !node.nodeValue.trim()) return NodeFilter.FILTER_REJECT;
+      const parent = node.parentNode;
+      if (!parent) return NodeFilter.FILTER_REJECT;
+      const tag = parent.nodeName.toLowerCase();
+      // don't touch text inside these tags (including headings) to avoid corrupting generated markup
+      if (['script', 'style', 'a', 'code', 'pre', 'h1', 'h2', 'h3', 'h4', 'h5', 'h6'].includes(tag)) return NodeFilter.FILTER_REJECT;
+      return NodeFilter.FILTER_ACCEPT;
+    }
+  });
+  const nodes = [];
+  let n;
+  while ((n = walker.nextNode())) nodes.push(n);
+  for (const t of nodes) cb(t);
+}
+
+// --- tooltip handlers ---
+function onEntityHover(ev) {
+  const a = ev.currentTarget;
+  const name = a.dataset.entityName;
+  const type = a.dataset.entityType;
+  if (!state.storyData) return;
+  const raw = state.storyData[type] || '';
+  const map = parseEntitySections(raw);
+  const entry = map[name] || { title: name, desc: '' };
+  const images = state.storyData.images && state.storyData.images[type] ? state.storyData.images[type] : [];
+  const img = images.length ? images[0] : null;
+
+  if (tooltipEl) {
+    tooltipEl.remove();
+    tooltipEl = null;
+  }
+
+  tooltipEl = document.createElement('div');
+  tooltipEl.className = 'entity-tooltip';
+  if (img) {
+    const im = document.createElement('img');
+    im.src = img;
+    tooltipEl.appendChild(im);
+  }
+  const h = document.createElement('div');
+  h.innerHTML = `<strong>${entry.title}</strong>`;
+  tooltipEl.appendChild(h);
+  if (entry.desc) {
+    const d = document.createElement('div');
+    d.className = 'small';
+    d.textContent = entry.desc.split('\n')[0];
+    tooltipEl.appendChild(d);
+  }
+  document.body.appendChild(tooltipEl);
+  const rect = a.getBoundingClientRect();
+  tooltipEl.style.left = (rect.right + 8) + 'px';
+  tooltipEl.style.top = (rect.top) + 'px';
+}
+
+function onEntityOut() {
+  if (tooltipEl) {
+    tooltipEl.remove();
+    tooltipEl = null;
+  }
+}
+
+// --- Entity editor modal ---
+function openEntityEditor(type, name) {
+  if (!state.currentStory) return alert('Open a story first');
+  currentEditing = { type, name };
+  entityModalTitle.textContent = `${type === 'characters' ? 'Character' : 'Location'}: ${name}`;
+  const raw = state.storyData[type] || '';
+  const map = parseEntitySections(raw);
+  const entry = map[name];
+  entityContent.value = entry ? entry.desc : '';
+  entityImageInput.value = '';
+  entityModal.classList.remove('hidden');
+}
+
+closeEntityBtn.addEventListener('click', () => entityModal.classList.add('hidden'));
+
+function openEntityInEditor(type, name) {
+  if (!state.currentStory) return alert('Open a story first');
+  state.currentView = { type, name };
+  const raw = state.storyData[type] || '';
+  const map = parseEntitySections(raw);
+  const entry = map[name] || { title: name, desc: '' };
+  // load the entity as markdown into the editor so it behaves like the main text
+  editor.value = composeSection(entry.title, entry.desc);
+  renderPreview();
+}
+
+saveEntityBtn.addEventListener('click', async () => {
+  if (!currentEditing || !currentEditing.name) return;
+  const { type, name } = currentEditing;
+  const filename = type === 'characters' ? 'characters.md' : 'locations.md';
+  const raw = state.storyData[type] || '';
+  const map = parseEntitySections(raw);
+  map[name] = { title: name, desc: (entityContent.value || '').trim() };
+
+  // if an image was selected, upload it to the story images and then proceed
+  const file = entityImageInput.files[0];
+  if (file) {
+    const up = await api.uploadImage(state.currentStory, type, file);
+    if (!up || !up.ok) return alert(up && up.error ? up.error : 'Image upload failed');
+    // refresh state to include the new image
+    const updated = await api.getStory(state.currentStory);
+    if (updated && updated.ok) state.storyData = updated;
+  }
+
+  const sections = Object.values(map).map(e => composeSection(e.title, e.desc));
+  const newContent = sections.join('\n\n');
+  const res = await api.saveFile(state.currentStory, filename, newContent);
+  if (!res || !res.ok) return alert(res && res.error ? res.error : 'Save failed');
+  const updated = await api.getStory(state.currentStory);
+  if (updated && updated.ok) {
+    state.storyData = updated;
+    entityModal.classList.add('hidden');
+    refreshEntityLists();
+  }
+});
+
+editor.addEventListener('contextmenu', (ev) => {
+  ev.preventDefault();
+  if (!state.currentStory) return;
+  // remember selection/caret for later insertion
+  lastEditorSelection = { start: editor.selectionStart, end: editor.selectionEnd };
+
+  // compute selected word or caret word
+  let start = lastEditorSelection.start;
+  let end = lastEditorSelection.end;
+  let selected = '';
+  if (start !== end) {
+    selected = editor.value.substring(start, end).trim();
+  } else {
+    const v = editor.value;
+    let i = start;
+    let a = i, b = i;
+    while (a > 0 && /\w/.test(v[a - 1])) a--;
+    while (b < v.length && /\w/.test(v[b])) b++;
+    selected = v.substring(a, b).trim();
+  }
+
+  // remove existing menu
+  if (customContextEl) {
+    customContextEl.remove();
+    customContextEl = null;
+  }
+
+  customContextEl = document.createElement('div');
+  customContextEl.className = 'custom-context';
+  customContextEl.style.left = ev.pageX + 'px';
+  customContextEl.style.top = ev.pageY + 'px';
+
+  const btnChar = document.createElement('button');
+  btnChar.textContent = `Make "${selected}" a Character`;
+  btnChar.addEventListener('click', async () => {
+    if (!state.currentStory) { alert('Open a story first'); return; }
+    try {
+      await createEntityAndOpen('characters', selected);
+    } catch (err) {
+      console.error('createEntityAndOpen error', err);
+      alert('Failed to create/open character');
+    }
+    if (customContextEl) customContextEl.remove();
+  });
+
+  const btnLoc = document.createElement('button');
+  btnLoc.textContent = `Make "${selected}" a Location`;
+  btnLoc.addEventListener('click', async () => {
+    if (!state.currentStory) { alert('Open a story first'); return; }
+    try {
+      await createEntityAndOpen('locations', selected);
+    } catch (err) {
+      console.error('createEntityAndOpen error', err);
+      alert('Failed to create/open location');
+    }
+    if (customContextEl) customContextEl.remove();
+  });
+
+  const btnUpload = document.createElement('button');
+  btnUpload.textContent = 'Upload image...';
+  btnUpload.addEventListener('click', () => {
+    uploadContext = { mode: 'editor', type: 'text', start: lastEditorSelection.start, end: lastEditorSelection.end, selected };
+    document.getElementById('globalHiddenFileInput').click();
+    if (customContextEl) customContextEl.remove();
+  });
+
+  customContextEl.appendChild(btnChar);
+  customContextEl.appendChild(btnLoc);
+  customContextEl.appendChild(btnUpload);
+  document.body.appendChild(customContextEl);
+});
+
+// remove custom context on outer click
+document.addEventListener('click', (e) => {
+  if (customContextEl && !customContextEl.contains(e.target)) {
+    customContextEl.remove();
+    customContextEl = null;
+  }
+});
+
+function openNewEntityModal(type, name) {
+  currentEditing = { type, name };
+  entityModalTitle.textContent = `${type === 'characters' ? 'New character' : 'New location'}: ${name}`;
+  entityContent.value = '';
+  entityImageInput.value = '';
+  entityModal.classList.remove('hidden');
+}
+
+async function createEntityAndOpen(type, name) {
+  // create the entity entry (if missing) in the appropriate file, refresh state, then open it in editor
+  if (!state.currentStory) throw new Error('Open a story first');
+  const filename = type === 'characters' ? 'characters.md' : 'locations.md';
+  const raw = state.storyData && state.storyData[type] ? state.storyData[type] : '';
+  const map = parseEntitySections(raw);
+
+  // if already exists, just open it
+  const arr = parseEntitySectionsArray(raw);
+  const existingIdx = arr.findIndex(s => s.title === name);
+  if (existingIdx === -1) {
+    arr.push({ title: name, desc: '' });
+    const newContent = arr.map(s => composeSection(s.title, s.desc)).join('\n\n');
+    const res = await api.saveFile(state.currentStory, filename, newContent);
+    if (!res || !res.ok) throw new Error(res && res.error ? res.error : 'Save failed');
+    const updated = await api.getStory(state.currentStory);
+    if (updated && updated.ok) state.storyData = updated;
+    await refreshEntityLists();
+  } else {
+    // ensure lists are up to date
+    await refreshEntityLists();
+  }
+
+  // load it into the main editor and render
+  openEntityInEditor(type, name);
+}
+
+// clicking highlighted entity opens editor (delegation)
+preview.addEventListener('click', (ev) => {
+  const a = ev.target.closest('a.entity-char, a.entity-loc');
+  if (!a) return;
+  const name = a.dataset.entityName;
+  const type = a.dataset.entityType;
+  openEntityEditor(type, name);
+});
+
+// right-click on highlighted entity: edit or upload image
+preview.addEventListener('contextmenu', (ev) => {
+  ev.preventDefault();
+  if (!state.currentStory) return;
+  const a = ev.target.closest('a.entity-char, a.entity-loc');
+  if (!a) return;
+  const ename = a.dataset.entityName;
+  const etype = a.dataset.entityType; // 'characters' or 'locations'
+
+  if (customContextEl) customContextEl.remove();
+  customContextEl = document.createElement('div');
+  customContextEl.className = 'custom-context';
+  customContextEl.style.left = ev.pageX + 'px';
+  customContextEl.style.top = ev.pageY + 'px';
+
+  const btnEdit = document.createElement('button');
+  btnEdit.textContent = `Edit "${ename}"`;
+  btnEdit.addEventListener('click', () => {
+    openEntityEditor(etype, ename);
+    if (customContextEl) customContextEl.remove();
+  });
+
+  const btnUpload = document.createElement('button');
+  btnUpload.textContent = `Upload image for "${ename}"`;
+  btnUpload.addEventListener('click', () => {
+    uploadContext = { mode: 'entity', type: etype, name: ename };
+    document.getElementById('globalHiddenFileInput').click();
+    if (customContextEl) customContextEl.remove();
+  });
+
+  customContextEl.appendChild(btnEdit);
+  customContextEl.appendChild(btnUpload);
+  document.body.appendChild(customContextEl);
+});
+
+ // live preview on input + autosave (debounced)
+ editor.addEventListener('input', (e) => {
+  try {
+    renderPreview();
+    // update entity occurrence counts in real-time:
+    // - if user is editing the main story text, count occurrences in editor.value
+    // - otherwise (editing an entity) count occurrences only in the stored main story text
+    if (state.currentView && state.currentView.type === 'text') {
+      refreshEntityLists(editor.value);
+    } else {
+      refreshEntityLists();
+    }
+    // autosave with small debounce to avoid too many writes while typing;
+    // user asked for autosave on each typed key — this runs ~500ms after last keystroke.
+    scheduleAutoSave(500);
+  } catch (err) {
+    console.error('input handler error', err);
+  }
+ });
+
+ // initial load
+ refreshStories();
+ // ensure editor is disabled until a story is opened
+ setEditorEnabled(false);
+
+// expose for debugging
+window._storyWriter = { state, refreshStories, openStory, saveMainText };

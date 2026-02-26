@@ -1,0 +1,75 @@
+:root{
+  --sidebar-w:300px;
+  --gap:12px;
+  --accent-blue:#1e90ff;
+  --accent-green:#28a745;
+  --bg:#f6f7fb;
+  --muted:#777;
+}
+
+*{box-sizing:border-box;font-family:Inter, system-ui, -apple-system, "Segoe UI", Roboto, "Helvetica Neue", Arial;}
+
+body,html,#app{height:100%;margin:0;padding:0;background:var(--bg);color:#111}
+#app{display:flex;min-height:100vh}
+aside#sidebar{
+  width:var(--sidebar-w);
+  background:#fff;
+  border-right:1px solid #e6e7ee;
+  padding:12px;
+  display:flex;
+  flex-direction:column;
+  gap:12px;
+}
+.stories, .entities, .story-actions { background:transparent; }
+.stories h3, .entities h3 { margin:6px 0;font-size:14px;display:flex;align-items:center;gap:8px;justify-content:space-between; }
+.story-controls{display:flex;gap:8px;margin-bottom:8px}
+.story-controls input{flex:1;padding:6px;border:1px solid #ddd;border-radius:4px}
+.story-controls button{padding:6px 8px;border-radius:4px;border:1px solid #ddd;background:#f2f3f7}
+
+#storyList, #characterList, #locationList{list-style:none;margin:0;padding:0;max-height:220px;overflow:auto}
+#storyList li, #characterList li, #locationList li{padding:6px;border-radius:4px;cursor:pointer}
+#storyList li:hover, #characterList li:hover, #locationList li:hover{background:#f5f7ff}
+
+.story-actions{margin-top:auto;display:flex;flex-direction:column;gap:8px}
+.story-actions input{padding:6px;border:1px solid #ddd;border-radius:4px}
+.story-actions button{padding:6px;border-radius:4px;border:1px solid #ddd;background:#fff}
+.upload{display:flex;flex-direction:column;gap:6px}
+
+main#main{flex:1;display:flex;flex-direction:column;min-width:0;padding:16px}
+header{display:flex;align-items:center;justify-content:space-between;gap:12px}
+header h1{margin:0;font-size:18px}
+#editorArea{display:flex;gap:12px;flex:1;min-height:0;margin-top:12px}
+#editor{flex:1;min-width:0;height:100%;resize:none;padding:12px;border:1px solid #e6e7ee;border-radius:6px;background:#fff;font-family:ui-monospace,SFMono-Regular,Menlo,monospace}
+.preview{flex:1;min-width:0;height:100%;overflow:auto;padding:12px;border:1px solid #e6e7ee;border-radius:6px;background:#fff}
+.preview p{margin:0 0 8px 0}
+button{cursor:pointer}
+
+a.entity-char{color:var(--accent-blue);text-decoration:underline;cursor:pointer}
+a.entity-loc{color:var(--accent-green);text-decoration:underline;cursor:pointer}
+
+/* tooltip for hover */
+.entity-tooltip{
+  position:fixed;
+  z-index:2000;
+  background:#fff;
+  border:1px solid #ddd;
+  padding:8px;
+  border-radius:6px;
+  max-width:280px;
+  box-shadow:0 4px 16px rgba(0,0,0,0.08);
+  font-size:13px;
+}
+.entity-tooltip img{max-width:100%;height:auto;border-radius:4px;margin-bottom:6px}
+
+/* modal */
+.modal{position:fixed;left:0;top:0;right:0;bottom:0;display:flex;align-items:center;justify-content:center;z-index:3000;background:rgba(0,0,0,0.35)}
+.modal.hidden{display:none}
+.modal-content{width:720px;max-width:95%;background:#fff;border-radius:8px;padding:12px;border:1px solid #ddd}
+.modal-controls{display:flex;gap:8px;align-items:center;margin-top:8px}
+
+/* custom context menu */
+.custom-context{position:fixed;z-index:4000;background:#fff;border:1px solid #ddd;border-radius:6px;padding:6px;box-shadow:0 6px 18px rgba(0,0,0,0.12)}
+.custom-context button{display:block;width:100%;text-align:left;padding:6px;border:none;background:transparent}
+
+/* small helpers */
+.small{font-size:13px;color:var(--muted)}

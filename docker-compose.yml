@@ -1,0 +1,11 @@
+version: '3.8'
+services:
+  story-writer:
+    build: .
+    ports:
+      - "3000:3000"
+    volumes:
+      - ./stories:/app/stories
+      - ./public:/app/public
+    environment:
+      - NODE_ENV=production
