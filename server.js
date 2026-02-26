@@ -164,18 +164,47 @@ const storage = multer.diskStorage({
 });
 const upload = multer({ storage });
 
-// Upload image
-app.post('/api/stories/:name/images', upload.single('file'), (req, res) => {
-  if (!req.file) return res.status(400).json({ ok: false, error: 'no file uploaded' });
-  // return public path to file
-  const story = safeName(req.params.name);
-  const rel = path.relative(STORIES_ROOT, req.file.path);
-  const url = '/' + path.join('stories', rel).split(path.sep).map(encodeURIComponent).join('/');
-  res.json({ ok: true, url });
-});
-
-// Start server
-const PORT = process.env.PORT || 3000;
-app.listen(PORT, () => {
-  console.log(`Story writer server listening on http://localhost:${PORT}`);
-});
+ // Upload image
+ app.post('/api/stories/:name/images', upload.single('file'), (req, res) => {
+   if (!req.file) return res.status(400).json({ ok: false, error: 'no file uploaded' });
+   // return public path to file
+   const story = safeName(req.params.name);
+   const rel = path.relative(STORIES_ROOT, req.file.path);
+   const url = '/' + path.join('stories', rel).split(path.sep).map(encodeURIComponent).join('/');
+   res.json({ ok: true, url });
+ });
+ 
+ // Delete story (remove entire story folder and contents)
+ app.delete('/api/stories/:name', (req, res) => {
+   const name = req.params.name;
+   const base = storyPath(name);
+   if (!fs.existsSync(base)) return res.status(404).json({ ok: false, error: 'story not found' });
+   try {
+     // remove directory recursively - use rmSync when available for clarity, fall back to rSync for older Node
+     if (fs.rmSync) {
+       fs.rmSync(base, { recursive: true, force: true });
+     } else {
+       // Node <14 fallback
+       const rimraf = (p) => {
+         if (fs.existsSync(p)) {
+           for (const entry of fs.readdirSync(p)) {
+             const cur = path.join(p, entry);
+             if (fs.lstatSync(cur).isDirectory()) rimraf(cur);
+             else fs.unlinkSync(cur);
+           }
+           fs.rmdirSync(p);
+         }
+       };
+       rimraf(base);
+     }
+     res.json({ ok: true });
+   } catch (err) {
+     res.status(500).json({ ok: false, error: err.message });
+   }
+ });
+ 
+ // Start server
+ const PORT = process.env.PORT || 3000;
+ app.listen(PORT, () => {
+   console.log(`Story writer server listening on http://localhost:${PORT}`);
+ });

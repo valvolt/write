@@ -26,6 +26,13 @@ aside#sidebar{
 .story-controls input{flex:1;padding:6px;border:1px solid #ddd;border-radius:4px}
 .story-controls button{padding:6px 8px;border-radius:4px;border:1px solid #ddd;background:#f2f3f7}
 
+/* Story list item layout: align name and actions (delete) similar to entity sort controls.
+   Make the delete button visually match the sort/select button size and spacing. */
+#storyList li.story-item{display:flex;align-items:center;justify-content:space-between;gap:8px;padding:6px;border-radius:4px;cursor:pointer}
+#storyList li.story-item span{flex:1;min-width:0}
+#storyList li.story-item .story-delete{padding:6px 8px;border-radius:4px;border:1px solid #ddd;background:#f2f3f7;font-size:13px;line-height:1;cursor:pointer}
+#storyList li.story-item .story-delete:hover{background:#eef4ff}
+
 #storyList, #characterList, #locationList{list-style:none;margin:0;padding:0;max-height:220px;overflow:auto}
 #storyList li, #characterList li, #locationList li{padding:6px;border-radius:4px;cursor:pointer}
 #storyList li:hover, #characterList li:hover, #locationList li:hover{background:#f5f7ff}

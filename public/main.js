@@ -20,6 +20,7 @@ const api = {
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ newName })
   }).then(r => r.json()),
+  deleteStory: (name) => fetch(`/api/stories/${encodeURIComponent(name)}`, { method: 'DELETE' }).then(r => r.json()),
   uploadImage: (name, type, file) => {
     const fd = new FormData();
     fd.append('file', file);
@@ -293,9 +294,42 @@ async function refreshStories() {
   storyList.innerHTML = '';
   for (const s of res.stories) {
     const li = document.createElement('li');
-    li.textContent = s;
-    li.dataset.name = s;
-    li.addEventListener('click', () => openStory(s));
+    li.className = 'story-item';
+    const nameSpan = document.createElement('span');
+    nameSpan.textContent = s;
+    nameSpan.dataset.name = s;
+    nameSpan.addEventListener('click', () => openStory(s));
+    li.appendChild(nameSpan);
+
+    // delete button (asks for confirmation before deleting the story folder)
+    const del = document.createElement('button');
+    del.className = 'story-delete';
+    del.textContent = 'Delete';
+    del.addEventListener('click', async (ev) => {
+      ev.stopPropagation();
+      if (!confirm(`Delete story "${s}" and all its files/images? This cannot be undone.`)) return;
+      try {
+        const rr = await api.deleteStory(s);
+        if (!rr || !rr.ok) return alert(rr && rr.error ? rr.error : 'Delete failed');
+        // if the deleted story is currently open, close it
+        if (state.currentStory === s) {
+          state.currentStory = null;
+          state.storyData = null;
+          currentStoryTitle.textContent = 'No story opened';
+          editor.value = '';
+          preview.innerHTML = '';
+          characterList.innerHTML = '';
+          locationList.innerHTML = '';
+          setEditorEnabled(false);
+        }
+        await refreshStories();
+      } catch (err) {
+        console.error('delete story failed', err);
+        alert('Delete failed');
+      }
+    });
+    li.appendChild(del);
+
     storyList.appendChild(li);
   }
 }
