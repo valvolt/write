@@ -689,7 +689,16 @@ function onEntityHover(ev) {
   const map = parseEntitySections(raw);
   const entry = map[name] || { title: name, desc: '' };
   const images = state.storyData.images && state.storyData.images[type] ? state.storyData.images[type] : [];
-  const img = images.length ? images[0] : null;
+
+  // choose image to show in tooltip:
+  // - prefer an image URL embedded in the entity description markdown (![alt](url))
+  // - otherwise fall back to the story images list for that entity type
+  let imgUrl = null;
+  if (entry.desc) {
+    const mdImg = entry.desc.match(/!\[([^\]]*)\]\(([^)]+)\)/);
+    if (mdImg && mdImg[2]) imgUrl = mdImg[2];
+  }
+  if (!imgUrl && images.length) imgUrl = images[0];
 
   if (tooltipEl) {
     tooltipEl.remove();
@@ -698,20 +707,37 @@ function onEntityHover(ev) {
 
   tooltipEl = document.createElement('div');
   tooltipEl.className = 'entity-tooltip';
-  if (img) {
+
+  // if we found an image URL, render it
+  if (imgUrl) {
     const im = document.createElement('img');
-    im.src = img;
+    im.src = imgUrl;
+    im.alt = entry.title || '';
     tooltipEl.appendChild(im);
   }
+
   const h = document.createElement('div');
   h.innerHTML = `<strong>${entry.title}</strong>`;
   tooltipEl.appendChild(h);
+
   if (entry.desc) {
-    const d = document.createElement('div');
-    d.className = 'small';
-    d.textContent = entry.desc.split('\n')[0];
-    tooltipEl.appendChild(d);
+    // render the first non-image line of the description as plain text
+    const lines = entry.desc.split('\n').map(l => l.trim()).filter(Boolean);
+    let summary = '';
+    for (const L of lines) {
+      // skip pure image lines
+      if (/^!\[.*\]\(.*\)$/.test(L)) continue;
+      summary = L;
+      break;
+    }
+    if (summary) {
+      const d = document.createElement('div');
+      d.className = 'small';
+      d.textContent = summary;
+      tooltipEl.appendChild(d);
+    }
   }
+
   document.body.appendChild(tooltipEl);
   const rect = a.getBoundingClientRect();
   tooltipEl.style.left = (rect.right + 8) + 'px';
