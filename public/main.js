@@ -35,7 +35,9 @@ const state = {
   storyData: null, // result of GET /api/stories/:name
   // currentView indicates what the editor is showing:
   // { type: 'text'|'highlights', name?: string }
-  currentView: { type: 'text', name: null }
+  currentView: { type: 'text', name: null },
+  // activeTagFilter holds the currently selected tag used to filter highlight lists (null = no filter)
+  activeTagFilter: null
 };
 // autosave timer handle (debounced saves while typing)
 let autosaveTimer = null;
@@ -630,6 +632,24 @@ document.addEventListener('keydown', (e) => {
     return el;
   }
 
+  // ensure a visible filter indicator exists above the highlights list so the user
+  // can clearly see which tag is active and click the 'x' to clear the filter.
+  function ensureFilterIndicator() {
+    let el = document.getElementById('tagFilterIndicator');
+    if (!el && highlightList && highlightList.parentNode) {
+      el = document.createElement('div');
+      el.id = 'tagFilterIndicator';
+      el.style.margin = '6px 0';
+      el.style.fontSize = '13px';
+      el.style.display = 'flex';
+      el.style.alignItems = 'center';
+      el.style.gap = '8px';
+      // place it directly above the highlight list
+      highlightList.parentNode.insertBefore(el, highlightList);
+    }
+    return el;
+  }
+
   function renderList(arr, container, type, sortMode) {
     if (sortMode === 'alpha') arr.sort((a, b) => a.name.localeCompare(b.name));
     else arr.sort((a, b) => b.count - a.count || a.name.localeCompare(b.name));
@@ -638,7 +658,16 @@ document.addEventListener('keydown', (e) => {
     // for story-level tags, extract from the main story text (not from highlights)
     const storyTagsArr = extractTagsFromText(mainText);
 
-    for (const item of arr) {
+    // If a tag filter is active, only show highlights that include that tag
+    const filteredArr = state.activeTagFilter
+      ? arr.filter(item => {
+        const desc = (hls && hls[item.name] && typeof hls[item.name].desc === 'string') ? hls[item.name].desc : '';
+        const tags = extractTagsFromText(desc);
+        return tags.includes(state.activeTagFilter);
+      })
+      : arr;
+
+    for (const item of filteredArr) {
       const li = document.createElement('li');
 
       // name and count
@@ -669,10 +698,20 @@ document.addEventListener('keydown', (e) => {
           tspan.style.color = st.color;
         }
         tspan.style.marginLeft = '6px';
+        // clicking a tag toggles the active filter; stopPropagation so the li click doesn't fire
+        tspan.addEventListener('click', (ev) => {
+          ev.stopPropagation();
+          if (state.activeTagFilter === tag) state.activeTagFilter = null;
+          else state.activeTagFilter = tag;
+          // re-render lists using the new filter
+          refreshEntityLists(mainText);
+        });
+        // visually mark selected tag
+        if (state.activeTagFilter === tag) tspan.classList.add('selected');
         li.appendChild(tspan);
       }
 
-      // click behavior
+      // click behavior: open the entity in the main editor
       li.addEventListener('click', () => openEntityInEditor(type, item.name));
       container.appendChild(li);
     }
@@ -695,7 +734,63 @@ document.addEventListener('keydown', (e) => {
         }
         tspan.style.marginLeft = '6px';
         tspan.style.marginBottom = '0';
+        // clicking story tag also toggles the filter
+        tspan.addEventListener('click', (ev) => {
+          ev.stopPropagation();
+          if (state.activeTagFilter === tag) state.activeTagFilter = null;
+          else state.activeTagFilter = tag;
+          refreshEntityLists(mainText);
+        });
+        if (state.activeTagFilter === tag) tspan.classList.add('selected');
         storyTagsEl.appendChild(tspan);
+      }
+    }
+
+    // update/render a clearable filter indicator above the highlights list so the user
+    // can immediately see which tag is active and clear it with one click.
+    const filterIndicator = ensureFilterIndicator();
+    if (filterIndicator) {
+      filterIndicator.innerHTML = '';
+      if (state.activeTagFilter) {
+        const label = document.createElement('div');
+        label.style.display = 'inline-flex';
+        label.style.alignItems = 'center';
+        label.style.gap = '8px';
+
+        const tag = state.activeTagFilter;
+        const tagEl = document.createElement('span');
+        tagEl.className = 'tag selected';
+        tagEl.textContent = tag;
+        const st = (typeof tagStyleFor === 'function') ? tagStyleFor(tag) : null;
+        if (st) {
+          tagEl.style.background = st.background;
+          tagEl.style.color = st.color;
+        }
+
+        const clearBtn = document.createElement('button');
+        clearBtn.textContent = '×';
+        clearBtn.title = 'Clear tag filter';
+        clearBtn.style.border = 'none';
+        clearBtn.style.background = 'transparent';
+        clearBtn.style.cursor = 'pointer';
+        clearBtn.style.fontSize = '16px';
+        clearBtn.style.lineHeight = '1';
+        clearBtn.addEventListener('click', (ev) => {
+          ev.stopPropagation();
+          state.activeTagFilter = null;
+          refreshEntityLists(mainText);
+        });
+
+        const text = document.createElement('span');
+        text.textContent = 'Filtering by tag:';
+        text.className = 'small';
+        label.appendChild(text);
+        label.appendChild(tagEl);
+        label.appendChild(clearBtn);
+        filterIndicator.appendChild(label);
+      } else {
+        // empty indicator when no filter
+        filterIndicator.innerHTML = '';
       }
     }
   }
