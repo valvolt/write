@@ -291,8 +291,12 @@ function parseEntitySections(raw) {
 }
 
 function composeSection(title, desc) {
-  // preserve trailing newlines/whitespace in the section body
-  return `## ${title}\n\n${desc || ''}`;
+  // Normalize section body so we don't produce multiple blank lines when joining sections.
+  // - strip leading/trailing blank lines from the description
+  // - if the description is empty after trimming, return only the heading (joining will add a single separator)
+  const safeDesc = (desc || '').replace(/^\n+/, '').replace(/\n+$/, '');
+  if (!safeDesc) return `## ${title}`;
+  return `## ${title}\n\n${safeDesc}`;
 }
 
 /*
