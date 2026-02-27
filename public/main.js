@@ -206,10 +206,43 @@ function hashStringToInt(str) {
 }
 
 function tagStyleFor(tag) {
-  const hue = hashStringToInt(tag) % 360;
-  const bg = `hsl(${hue}, 60%, 85%)`;   // pastel background
-  const color = `hsl(${hue}, 55%, 28%)`; // darker same-hue text
-  return { background: bg, color };
+  // Static 20-entry pastel palette (Light background, Dark text) using the exact pairs provided.
+  const palette = [
+    { background: 'rgb(245, 245, 245)', color: 'rgb(51, 51, 51)' },      // Neutral / gray 1
+    { background: 'rgb(238, 238, 238)', color: 'rgb(34, 34, 34)' },      // Neutral / gray 2
+
+    { background: 'rgb(230, 243, 255)', color: 'rgb(20, 60, 110)' },     // Blues 1
+    { background: 'rgb(214, 234, 248)', color: 'rgb(21, 67, 96)' },      // Blues 2
+    { background: 'rgb(224, 247, 250)', color: 'rgb(0, 77, 102)' },      // Blues 3
+
+    { background: 'rgb(232, 245, 233)', color: 'rgb(27, 94, 32)' },      // Greens 1
+    { background: 'rgb(220, 237, 200)', color: 'rgb(51, 105, 30)' },     // Greens 2
+
+    { background: 'rgb(224, 247, 250)', color: 'rgb(0, 96, 100)' },      // Cyans/teals 1
+    { background: 'rgb(225, 245, 254)', color: 'rgb(1, 87, 155)' },      // Cyans/teals 2
+
+    { background: 'rgb(243, 229, 245)', color: 'rgb(74, 20, 140)' },     // Purples 1
+    { background: 'rgb(237, 231, 246)', color: 'rgb(69, 39, 160)' },     // Purples 2
+
+    { background: 'rgb(255, 235, 238)', color: 'rgb(136, 14, 79)' },     // Reds/pinks 1
+    { background: 'rgb(252, 228, 236)', color: 'rgb(173, 20, 87)' },     // Reds/pinks 2
+
+    { background: 'rgb(255, 243, 224)', color: 'rgb(230, 81, 0)' },      // Oranges 1
+    { background: 'rgb(255, 249, 230)', color: 'rgb(204, 112, 0)' },     // Oranges 2
+
+    { background: 'rgb(255, 253, 231)', color: 'rgb(245, 127, 23)' },    // Yellows/ambers 1
+    { background: 'rgb(255, 248, 225)', color: 'rgb(245, 124, 0)' },     // Yellows/ambers 2
+
+    { background: 'rgb(239, 235, 233)', color: 'rgb(78, 52, 46)' },      // Browns 1
+    { background: 'rgb(250, 244, 239)', color: 'rgb(93, 64, 55)' },      // Browns 2
+
+    { background: 'rgb(236, 239, 241)', color: 'rgb(33, 33, 33)' }       // Extra soft blue-gray
+  ];
+
+  // normalize tag to lower-case for case-insensitive mapping
+  const key = (typeof tag === 'string') ? tag.toLowerCase() : String(tag || '');
+  const idx = hashStringToInt(key) % palette.length;
+  return palette[idx];
 }
 
 /* Extract tags from text (global utility) — returns unique tag strings without the leading '#' */
