@@ -604,16 +604,99 @@ document.addEventListener('keydown', (e) => {
 
   const hlArr = Object.keys(hls).map(n => ({ name: n, count: countOccurrences(text, n) }));
 
+  // extract tags from a block of markdown/text — returns unique tags without the leading '#'
+  function extractTagsFromText(t) {
+    if (!t || typeof t !== 'string') return [];
+    const re = /#([A-Za-z0-9_-]+)/g;
+    const set = new Set();
+    let m;
+    while ((m = re.exec(t)) !== null) {
+      set.add(m[1]);
+    }
+    return Array.from(set);
+  }
+
+  // ensure a small story-level tags container exists next to the story title
+  function ensureStoryTagsContainer() {
+    let el = document.getElementById('storyTags');
+    if (!el && currentStoryTitle && currentStoryTitle.parentNode) {
+      el = document.createElement('div');
+      el.id = 'storyTags';
+      el.style.display = 'inline-block';
+      el.style.marginLeft = '12px';
+      el.style.verticalAlign = 'middle';
+      currentStoryTitle.parentNode.insertBefore(el, currentStoryTitle.nextSibling);
+    }
+    return el;
+  }
+
   function renderList(arr, container, type, sortMode) {
     if (sortMode === 'alpha') arr.sort((a, b) => a.name.localeCompare(b.name));
     else arr.sort((a, b) => b.count - a.count || a.name.localeCompare(b.name));
     container.innerHTML = '';
+
+    // for story-level tags, extract from the main story text (not from highlights)
+    const storyTagsArr = extractTagsFromText(mainText);
+
     for (const item of arr) {
       const li = document.createElement('li');
-      li.innerHTML = `${item.name} <span class="small">(${item.count})</span>`;
-      // open the entity in the main editor (left/center) and render in the preview (right)
+
+      // name and count
+      const nameSpan = document.createElement('span');
+      nameSpan.textContent = item.name;
+      nameSpan.style.fontWeight = '500';
+      nameSpan.style.marginRight = '8px';
+
+      const countSpan = document.createElement('span');
+      countSpan.className = 'small';
+      countSpan.textContent = `(${item.count})`;
+      countSpan.style.marginRight = '8px';
+
+      li.appendChild(nameSpan);
+      li.appendChild(countSpan);
+
+      // find tags inside the highlight description (if available in hls map)
+      const desc = (hls && hls[item.name] && typeof hls[item.name].desc === 'string') ? hls[item.name].desc : '';
+      const tags = extractTagsFromText(desc);
+      for (const tag of tags) {
+        const tspan = document.createElement('span');
+        tspan.className = 'tag';
+        tspan.dataset.tag = tag;
+        tspan.textContent = tag;
+        const st = (typeof tagStyleFor === 'function') ? tagStyleFor(tag) : null;
+        if (st) {
+          tspan.style.background = st.background;
+          tspan.style.color = st.color;
+        }
+        tspan.style.marginLeft = '6px';
+        li.appendChild(tspan);
+      }
+
+      // click behavior
       li.addEventListener('click', () => openEntityInEditor(type, item.name));
       container.appendChild(li);
+    }
+
+    // render story-level tags next to the story title (derived from main story text)
+    const storyTagsEl = ensureStoryTagsContainer();
+    if (storyTagsEl) {
+      storyTagsEl.innerHTML = '';
+      // stable sorted order
+      const storyTags = Array.from(new Set(storyTagsArr)).sort();
+      for (const tag of storyTags) {
+        const tspan = document.createElement('span');
+        tspan.className = 'tag';
+        tspan.dataset.tag = tag;
+        tspan.textContent = tag;
+        const st = (typeof tagStyleFor === 'function') ? tagStyleFor(tag) : null;
+        if (st) {
+          tspan.style.background = st.background;
+          tspan.style.color = st.color;
+        }
+        tspan.style.marginLeft = '6px';
+        tspan.style.marginBottom = '0';
+        storyTagsEl.appendChild(tspan);
+      }
     }
   }
 
