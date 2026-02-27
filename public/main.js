@@ -477,10 +477,13 @@ createStoryBtn.addEventListener('click', async () => {
    Double-click enters inline rename mode (preserves the previous behavior). */
 currentStoryTitle.addEventListener('click', async () => {
   if (!state.currentStory) return;
-  // fetch tiles in order and render concatenated markdown in the preview (read-only)
+  // Enter full view first so renderPreview will not overwrite the preview while we fetch tiles.
+  state.currentView = { type: 'full' };
   try {
-    // ensure tiles area visible and up to date
+    // ensure tiles area visible and up to date and keep editor read-only
     if (tilesSection) tilesSection.style.display = 'block';
+    setEditorEnabled(false);
+
     const listRes = await api.listTiles(state.currentStory);
     if (!listRes || !listRes.ok) {
       console.warn('listTiles failed', listRes && listRes.error);
@@ -496,16 +499,18 @@ currentStoryTitle.addEventListener('click', async () => {
         console.warn('failed to load tile', t.id, e);
       }
     }
-    // render into preview and disable the editor (read-only mode)
+    // render into preview (read-only mode)
     const html = (typeof marked !== 'undefined' && marked && typeof marked.parse === 'function')
       ? (marked.parse(combined || ''))
       : simpleMarkdownToHtml(combined || '');
-    // make the editor read-only (preserve the rendered preview)
-    setEditorEnabled(false);
     preview.innerHTML = html || '<div class="empty-preview">[no tiles]</div>';
-    state.currentView = { type: 'full' };
   } catch (e) {
     console.error('show full tiles failed', e);
+    // on error, fall back to editor text preview but keep full view state
+    try {
+      editor.value = (state.storyData && state.storyData.text) || '';
+      renderPreview();
+    } catch (err) { /* ignore */ }
   }
 });
 
@@ -564,19 +569,48 @@ async function openStory(name) {
   }
   state.currentStory = name;
   state.storyData = res;
-  // reset view to main story text when opening a story
-  state.currentView = { type: 'text', name: null };
+  // show the concatenated tiles by default when opening a story (read-only full view)
+  state.currentView = { type: 'full' };
   currentStoryTitle.textContent = name;
-  // enable editor area now that a story is open
-  setEditorEnabled(true);
-  editor.value = res.text || '';
-  renderPreview();
-  refreshEntityLists();
-  // update sidebar to reflect the currently open story
-  refreshStories();
-  // show tiles area and load tiles
+  // keep editor disabled by default when opening a story
+  setEditorEnabled(false);
+
+  // ensure tiles area visible and load tiles; render concatenated tiles into preview
   if (tilesSection) tilesSection.style.display = 'block';
-  try { await refreshTiles(); } catch (e) { console.warn('refreshTiles failed', e); }
+  try {
+    await refreshTiles();
+    // fetch tiles and render concatenated content in order
+    const listRes = await api.listTiles(state.currentStory);
+    if (listRes && listRes.ok) {
+      const tiles = listRes.tiles || [];
+      let combined = '';
+      for (const t of tiles) {
+        try {
+          const tileRes = await api.getTile(state.currentStory, t.id);
+          if (tileRes && tileRes.ok) combined += (tileRes.content || '') + '\n\n';
+        } catch (e) {
+          console.warn('failed to load tile during openStory', t.id, e);
+        }
+      }
+      const html = (typeof marked !== 'undefined' && marked && typeof marked.parse === 'function')
+        ? (marked.parse(combined || ''))
+        : simpleMarkdownToHtml(combined || '');
+      preview.innerHTML = html || '<div class="empty-preview">[no tiles]</div>';
+    } else {
+      // fallback to showing text.md preview if tiles unavailable
+      editor.value = res.text || '';
+      renderPreview();
+    }
+  } catch (e) {
+    console.warn('refreshTiles / openStory rendering failed', e);
+    // fallback behavior: show text.md in preview
+    editor.value = res.text || '';
+    renderPreview();
+  }
+
+  // update sidebar and entity lists
+  refreshEntityLists();
+  refreshStories();
 }
 
 saveBtn.addEventListener('click', saveMainText);
@@ -929,8 +963,12 @@ document.addEventListener('keydown', (e) => {
   // render highlights
   if (highlightList) renderList(hlArr, highlightList, 'highlights', hlSort && hlSort.value ? hlSort.value : 'alpha');
 
-  // re-render preview to refresh highlights
-  renderPreview();
+    // re-render preview to refresh highlights
+    // If the UI is currently showing the full concatenated tiles view, we already
+    // rendered the preview manually and should avoid overwriting it with the editor content.
+    if (!(state.currentView && state.currentView.type === 'full')) {
+      renderPreview();
+    }
 }
 
  // sort change handlers
@@ -1150,6 +1188,9 @@ if (createTileBtn) {
    NOTE: renderPreview now renders markdown even when no story is opened so the right pane always shows live preview. */
 function renderPreview() {
   try {
+    // When the UI is showing the full concatenated tiles view we must not
+    // overwrite the preview (it is rendered from tiles, not from the editor).
+    if (state.currentView && state.currentView.type === 'full') return;
     const md = editor.value || '';
     console.log('[debug] renderPreview invoked, md length=', md.length);
     // log whether marked is present so we can diagnose why headings are not being converted
@@ -1412,6 +1453,9 @@ function openEntityInEditor(type, name) {
   const entry = map[name] || { title: name, desc: '' };
   // load the entity as markdown into the editor so it behaves like the main text
   editor.value = composeSection(entry.title, entry.desc);
+  // enable editor because user is editing a highlight
+  setEditorEnabled(true);
+  try { editor.focus(); } catch (e) {}
   renderPreview();
 }
 
