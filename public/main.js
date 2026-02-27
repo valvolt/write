@@ -887,6 +887,43 @@ document.addEventListener('keydown', (e) => {
       li.appendChild(nameSpan);
       li.appendChild(countSpan);
 
+      // If the highlight has zero occurrences, offer a Delete button to remove it.
+      // Do not show Delete when count > 0.
+      if (item.count === 0) {
+        const delHighlightBtn = document.createElement('button');
+        delHighlightBtn.textContent = 'Delete';
+        delHighlightBtn.style.marginLeft = '8px';
+        delHighlightBtn.addEventListener('click', async (ev) => {
+          ev.stopPropagation();
+          if (!confirm(`Delete highlight "${item.name}"? This will remove it from highlights.md`)) return;
+          try {
+            const filename = 'highlights.md';
+            const raw = (state.storyData && state.storyData.highlights) ? state.storyData.highlights : '';
+            const arr = parseEntitySectionsArray(raw);
+            const idx = arr.findIndex(s => s.title === item.name);
+            if (idx === -1) {
+              // nothing to do
+              await refreshEntityLists();
+              return;
+            }
+            arr.splice(idx, 1);
+            const newContent = arr.map(s => composeSection(s.title, s.desc)).join('\n\n');
+            const res = await api.saveFile(state.currentStory, filename, newContent);
+            if (!res || !res.ok) {
+              alert(res && res.error ? res.error : 'Delete failed');
+              return;
+            }
+            const updated = await api.getStory(state.currentStory);
+            if (updated && updated.ok) state.storyData = updated;
+            await refreshEntityLists();
+          } catch (err) {
+            console.error('delete highlight failed', err);
+            alert('Delete failed');
+          }
+        });
+        li.appendChild(delHighlightBtn);
+      }
+
       // find tags inside the highlight description (if available in hls map)
       const desc = (hls && hls[item.name] && typeof hls[item.name].desc === 'string') ? hls[item.name].desc : '';
       const tags = extractTagsFromText(desc);
