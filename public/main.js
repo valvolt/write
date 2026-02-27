@@ -1161,10 +1161,11 @@ editor.addEventListener('contextmenu', (ev) => {
     btnHl.addEventListener('click', async () => {
       if (!state.currentStory) { alert('Open a story first'); return; }
       try {
-        await createEntityAndOpen('highlights', selected);
+        // create the highlight but do not open it — keep the current editor view open
+        await createEntityAndOpen('highlights', selected, false);
       } catch (err) {
         console.error('createEntityAndOpen error', err);
-        alert('Failed to create/open highlight');
+        alert('Failed to create highlight');
       }
       if (customContextEl) customContextEl.remove();
     });
@@ -1199,14 +1200,14 @@ function openNewEntityModal(type, name) {
   entityModal.classList.remove('hidden');
 }
 
-async function createEntityAndOpen(type, name) {
-  // create the entity entry (if missing) in the highlights.md file, refresh state, then open it in editor
+async function createEntityAndOpen(type, name, openAfter = true) {
+  // create the entity entry (if missing) in the highlights.md file, refresh state, then optionally open it in editor
   if (!state.currentStory) throw new Error('Open a story first');
   const filename = 'highlights.md';
   const raw = state.storyData && state.storyData.highlights ? state.storyData.highlights : '';
   const map = parseEntitySections(raw);
 
-  // if already exists, just open it
+  // if already exists, just open it (or refresh lists)
   const arr = parseEntitySectionsArray(raw);
   const existingIdx = arr.findIndex(s => s.title === name);
   if (existingIdx === -1) {
@@ -1222,8 +1223,10 @@ async function createEntityAndOpen(type, name) {
     await refreshEntityLists();
   }
 
-  // load it into the main editor and render
-  openEntityInEditor('highlights', name);
+  // optionally open the new entity in the main editor
+  if (openAfter) {
+    openEntityInEditor('highlights', name);
+  }
 }
 
 /* clicking highlighted entity no longer opens the editor.
