@@ -125,6 +125,12 @@ if (globalFileInput) {
         const md = `![${file.name}](${url})`;
         editor.value = before + md + after;
         renderPreview();
+        // save immediately after inserting the image so the change persists
+        try {
+          await saveMainText();
+        } catch (err) {
+          console.warn('autosave after image insert failed', err);
+        }
       } else if (ctx.mode === 'entity') {
         // append image markdown to section (highlights.md)
         const filename = 'highlights.md';
@@ -1119,18 +1125,21 @@ editor.addEventListener('contextmenu', (ev) => {
   customContextEl.style.left = ev.pageX + 'px';
   customContextEl.style.top = ev.pageY + 'px';
 
-  const btnHl = document.createElement('button');
-  btnHl.textContent = `Make "${selected}" a Highlight`;
-  btnHl.addEventListener('click', async () => {
-    if (!state.currentStory) { alert('Open a story first'); return; }
-    try {
-      await createEntityAndOpen('highlights', selected);
-    } catch (err) {
-      console.error('createEntityAndOpen error', err);
-      alert('Failed to create/open highlight');
-    }
-    if (customContextEl) customContextEl.remove();
-  });
+  let btnHl = null;
+  if (selected && selected.length > 0) {
+    btnHl = document.createElement('button');
+    btnHl.textContent = `Make "${selected}" a Highlight`;
+    btnHl.addEventListener('click', async () => {
+      if (!state.currentStory) { alert('Open a story first'); return; }
+      try {
+        await createEntityAndOpen('highlights', selected);
+      } catch (err) {
+        console.error('createEntityAndOpen error', err);
+        alert('Failed to create/open highlight');
+      }
+      if (customContextEl) customContextEl.remove();
+    });
+  }
 
   const btnUpload = document.createElement('button');
   btnUpload.textContent = 'Upload image...';
@@ -1140,7 +1149,7 @@ editor.addEventListener('contextmenu', (ev) => {
     if (customContextEl) customContextEl.remove();
   });
 
-  customContextEl.appendChild(btnHl);
+  if (btnHl) customContextEl.appendChild(btnHl);
   customContextEl.appendChild(btnUpload);
   document.body.appendChild(customContextEl);
 });
