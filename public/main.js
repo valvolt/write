@@ -87,6 +87,8 @@ const tileList = $('#tileList');
 
 const highlightList = $('#highlightList');
 const hlSort = $('#hlSort');
+const newHighlightInput = $('#newHighlightInput');
+const createHighlightBtn = $('#createHighlightBtn');
 // hide the save button — we autosave on input so the button is now optional
 if (saveBtn) saveBtn.style.display = 'none';
 
@@ -1206,6 +1208,24 @@ if (createTileBtn) {
       renderPreview();
     }
   });
+
+  // create highlight via input in the sidebar
+  if (createHighlightBtn) {
+    createHighlightBtn.addEventListener('click', async () => {
+      if (!state.currentStory) return alert('Open a story first');
+      const name = (newHighlightInput && newHighlightInput.value) ? newHighlightInput.value.trim() : '';
+      if (!name) return alert('Enter a highlight name');
+      try {
+        // create highlight entry but do not open it in editor
+        await createEntityAndOpen('highlights', name, false);
+        if (newHighlightInput) newHighlightInput.value = '';
+        await refreshEntityLists();
+      } catch (err) {
+        console.error('createHighlight failed', err);
+        alert('Failed to create highlight');
+      }
+    });
+  }
 }
 
 /* Improved preview rendering: render markdown then wrap ALL entity occurrences (multi-match, multi-word, longest-first).

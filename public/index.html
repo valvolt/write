@@ -31,6 +31,13 @@
 
       <div class="entities">
         <h3>Highlights <select id="hlSort"><option value="alpha">A→Z</option><option value="count">By count</option></select></h3>
+
+        <!-- Add highlight via input -->
+        <div class="highlight-add" style="display:flex;gap:8px;margin-bottom:8px">
+          <input id="newHighlightInput" placeholder="New highlight name" />
+          <button id="createHighlightBtn">Add</button>
+        </div>
+
         <ul id="highlightList"></ul>
       </div>
 
