@@ -25,3 +25,10 @@ Local development / run
    node server.js
 4. Open the app in your browser:
    http://localhost:3000
+
+Tags
+- Syntax: write tags inline using a leading hash, e.g. #character, #hero, #location-name.
+- Where they render: tags are rendered in the right-hand preview pane as small pastel "pills" containing the tag text (the leading '#' is omitted in the pill).
+- Color and contrast: each tag is assigned a deterministic pastel background color derived from the tag text; the pill text uses a darker shade of the same hue for readable contrast.
+- Behavior: tags are rendered only in the preview (they do not alter the underlying markdown). Tag syntax accepts letters, numbers, underscores and hyphens.
+- Example: In a highlight description include "The guard #character stood watch. The main #hero arrived." — the preview will show "character" and "hero" as colored pill badges.

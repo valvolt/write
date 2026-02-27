@@ -33,9 +33,9 @@ aside#sidebar{
 #storyList li.story-item .story-delete{padding:6px 8px;border-radius:4px;border:1px solid #ddd;background:#f2f3f7;font-size:13px;line-height:1;cursor:pointer}
 #storyList li.story-item .story-delete:hover{background:#eef4ff}
 
-#storyList, #characterList, #locationList{list-style:none;margin:0;padding:0;max-height:220px;overflow:auto}
-#storyList li, #characterList li, #locationList li{padding:6px;border-radius:4px;cursor:pointer}
-#storyList li:hover, #characterList li:hover, #locationList li:hover{background:#f5f7ff}
+#storyList, #highlightList, #locationList{list-style:none;margin:0;padding:0;max-height:220px;overflow:auto}
+#storyList li, #highlightList li, #locationList li{padding:6px;border-radius:4px;cursor:pointer}
+#storyList li:hover, #highlightList li:hover, #locationList li:hover{background:#f5f7ff}
 
 .story-actions{margin-top:auto;display:flex;flex-direction:column;gap:8px}
 .story-actions input{padding:6px;border:1px solid #ddd;border-radius:4px}
@@ -51,7 +51,7 @@ header h1{margin:0;font-size:18px}
 .preview p{margin:0 0 8px 0}
 button{cursor:pointer}
 
-a.entity-char{color:var(--accent-blue);text-decoration:underline;cursor:pointer}
+a.entity-hl{color:var(--accent-blue);text-decoration:underline;cursor:pointer}
 a.entity-loc{color:var(--accent-green);text-decoration:underline;cursor:pointer}
 
 /* tooltip for hover */
@@ -80,3 +80,17 @@ a.entity-loc{color:var(--accent-green);text-decoration:underline;cursor:pointer}
 
 /* small helpers */
 .small{font-size:13px;color:var(--muted)}
+
+/* tag pills (rendered in preview) */
+.tag{
+  display:inline-block;
+  padding:0.15em 0.6em;
+  border-radius:999px;
+  font-size:0.85em;
+  margin:0 6px 6px 0;
+  line-height:1;
+  vertical-align:middle;
+  box-shadow:0 1px 2px rgba(0,0,0,0.04);
+}
+/* fallback cursor and spacing */
+.tag[data-tag]{cursor:default}

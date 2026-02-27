@@ -35,7 +35,7 @@ function ensureStoryStructure(name) {
   if (!fs.existsSync(base)) {
     fs.mkdirSync(base, { recursive: true });
   }
-  const files = ['text.md', 'characters.md', 'locations.md'];
+  const files = ['text.md', 'highlights.md'];
   for (const f of files) {
     const fp = path.join(base, f);
     if (!fs.existsSync(fp)) {
@@ -43,7 +43,7 @@ function ensureStoryStructure(name) {
     }
   }
   const imgs = path.join(base, 'images');
-  const sub = ['characters', 'locations', 'text'];
+  const sub = ['highlights', 'text'];
   for (const s of sub) {
     const p = path.join(imgs, s);
     if (!fs.existsSync(p)) {
@@ -105,12 +105,11 @@ app.get('/api/stories/:name', (req, res) => {
   if (!fs.existsSync(base)) return res.status(404).json({ ok: false, error: 'story not found' });
   try {
     const text = fs.readFileSync(path.join(base, 'text.md'), 'utf8');
-    const characters = fs.readFileSync(path.join(base, 'characters.md'), 'utf8');
-    const locations = fs.readFileSync(path.join(base, 'locations.md'), 'utf8');
+    const highlights = fs.readFileSync(path.join(base, 'highlights.md'), 'utf8');
     const imagesDir = path.join(base, 'images');
     const imageList = {};
     if (fs.existsSync(imagesDir)) {
-      for (const sub of ['characters', 'locations', 'text']) {
+      for (const sub of ['highlights', 'text']) {
         const p = path.join(imagesDir, sub);
         if (!fs.existsSync(p)) {
           imageList[sub] = [];
@@ -119,7 +118,7 @@ app.get('/api/stories/:name', (req, res) => {
         }
       }
     }
-    res.json({ ok: true, name, text, characters, locations, images: imageList });
+    res.json({ ok: true, name, text, highlights, images: imageList });
   } catch (err) {
     res.status(500).json({ ok: false, error: err.message });
   }
@@ -132,7 +131,7 @@ app.post('/api/stories/:name/save', (req, res) => {
   if (!file || !content) {
     return res.status(400).json({ ok: false, error: 'file and content required' });
   }
-  if (!['text.md', 'characters.md', 'locations.md'].includes(file)) {
+  if (!['text.md', 'highlights.md'].includes(file)) {
     return res.status(400).json({ ok: false, error: 'invalid file' });
   }
   const base = storyPath(name);
@@ -149,8 +148,8 @@ app.post('/api/stories/:name/save', (req, res) => {
 const storage = multer.diskStorage({
   destination: function (req, file, cb) {
     const story = req.params.name;
-    const type = req.body.type; // expected: characters|locations|text
-    const allowed = ['characters', 'locations', 'text'];
+    const type = req.body.type; // expected: highlights|text
+    const allowed = ['highlights', 'text'];
     const t = allowed.includes(type) ? type : 'text';
     const dest = path.join(STORIES_ROOT, safeName(story), 'images', t);
     fs.mkdirSync(dest, { recursive: true });

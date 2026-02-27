@@ -1,5 +1,5 @@
- // Story Writer - frontend (clean, working vanilla JS)
- console.log('[debug] main.js loaded');
+// Story Writer - frontend (clean, working vanilla JS)
+console.log('[debug] main.js loaded');
 
 // --- API helpers ---
 const api = {
@@ -34,7 +34,7 @@ const state = {
   currentStory: null,
   storyData: null, // result of GET /api/stories/:name
   // currentView indicates what the editor is showing:
-  // { type: 'text'|'characters'|'locations', name?: string }
+  // { type: 'text'|'highlights', name?: string }
   currentView: { type: 'text', name: null }
 };
 // autosave timer handle (debounced saves while typing)
@@ -55,14 +55,9 @@ const saveBtn = $('#saveBtn');
 const renameInput = $('#renameInput');
 const renameBtn = $('#renameBtn');
 const closeStoryBtn = $('#closeStoryBtn');
-const imageUpload = $('#imageUpload');
-const uploadBtn = $('#uploadBtn');
-const uploadType = $('#uploadType');
 
-const characterList = $('#characterList');
-const locationList = $('#locationList');
-const charSort = $('#charSort');
-const locSort = $('#locSort');
+const highlightList = $('#highlightList');
+const hlSort = $('#hlSort');
 // hide the save button — we autosave on input so the button is now optional
 if (saveBtn) saveBtn.style.display = 'none';
 
@@ -102,7 +97,7 @@ let tooltipEl = null;
 // currently editing entity info
 let currentEditing = { type: null, name: null };
 let lastEditorSelection = null; // saved when user opens editor context menu
-let uploadContext = null; // { mode: 'editor'|'entity', type: 'text'|'characters'|'locations', name?, start?, end? }
+let uploadContext = null; // { mode: 'editor'|'entity', type: 'text'|'highlights', name?, start?, end? }
 
 /* global hidden file input handler (used by right-click upload actions) */
 const globalFileInput = document.getElementById('globalHiddenFileInput');
@@ -129,9 +124,9 @@ if (globalFileInput) {
         editor.value = before + md + after;
         renderPreview();
       } else if (ctx.mode === 'entity') {
-        // append image markdown to section (characters.md / locations.md)
-        const filename = ctx.type === 'characters' ? 'characters.md' : 'locations.md';
-        const raw = state.storyData[ctx.type] || '';
+        // append image markdown to section (highlights.md)
+        const filename = 'highlights.md';
+        const raw = state.storyData && state.storyData.highlights ? state.storyData.highlights : '';
         const sections = parseEntitySections(raw);
         const entry = sections[ctx.name] || { title: ctx.name, desc: '' };
         entry.desc = (entry.desc ? entry.desc + '\n\n' : '') + `![${file.name}](${url})`;
@@ -146,7 +141,7 @@ if (globalFileInput) {
     } catch (err) {
       console.error('upload handler error', err);
       alert('Upload failed');
- }
+    }
   });
 }
 
@@ -155,25 +150,94 @@ function escapeRegExp(s) {
   return s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 }
 
+/* --- tag rendering helpers ---
+   Generate a deterministic pastel background color and a darker text color
+   based on the tag string so each tag gets the same color every time. */
+function hashStringToInt(str) {
+  let h = 0;
+  for (let i = 0; i < str.length; i++) {
+    h = ((h << 5) - h) + str.charCodeAt(i);
+    h |= 0;
+  }
+  return Math.abs(h);
+}
+
+function tagStyleFor(tag) {
+  const hue = hashStringToInt(tag) % 360;
+  const bg = `hsl(${hue}, 60%, 85%)`;   // pastel background
+  const color = `hsl(${hue}, 55%, 28%)`; // darker same-hue text
+  return { background: bg, color };
+}
+
+/* Render occurrences of #tag inside the given root element (preview).
+   Uses walkTextNodes to avoid replacing inside code, links, headings, etc. */
+function renderTags(root) {
+  walkTextNodes(root, (textNode) => {
+    const parent = textNode.parentNode;
+    const txt = textNode.nodeValue;
+    if (!txt || !txt.trim()) return;
+
+    const re = /#([A-Za-z0-9_-]+)/g;
+    let m;
+    const matches = [];
+    while ((m = re.exec(txt)) !== null) {
+      matches.push({ index: m.index, text: m[0], tag: m[1], length: m[0].length });
+    }
+    if (matches.length === 0) return;
+
+    // filter overlaps (keep earliest non-overlapping matches)
+    matches.sort((a, b) => a.index - b.index || b.length - a.length);
+    const filtered = [];
+    let lastEnd = -1;
+    for (const mt of matches) {
+      if (mt.index >= lastEnd) {
+        filtered.push(mt);
+        lastEnd = mt.index + mt.length;
+      }
+    }
+
+    const frag = document.createDocumentFragment();
+    let cursor = 0;
+    for (const mt of filtered) {
+      if (mt.index > cursor) {
+        frag.appendChild(document.createTextNode(txt.slice(cursor, mt.index)));
+      }
+      const span = document.createElement('span');
+      span.className = 'tag';
+      span.dataset.tag = mt.tag;
+      span.textContent = mt.tag;
+      const st = tagStyleFor(mt.tag);
+      span.style.background = st.background;
+      span.style.color = st.color;
+      frag.appendChild(span);
+      cursor = mt.index + mt.length;
+    }
+    if (cursor < txt.length) frag.appendChild(document.createTextNode(txt.slice(cursor)));
+    parent.replaceChild(frag, textNode);
+  });
+}
+
 // parse entities markdown into map Name -> {title, desc}
 // expects sections like "## Name\n\nDescription..."
 function parseEntitySections(raw) {
   if (!raw || !raw.trim()) return {};
-  // split on headings starting with "## "
-  const parts = raw.split(/\n(?=##\s+)/g).map(p => p.trim()).filter(Boolean);
+  // split on headings starting with "## " — preserve section raw content and description whitespace
+  const parts = raw.split(/\n(?=##\s+)/g).filter(Boolean);
   const map = {};
   for (const p of parts) {
-    const lines = p.split('\n').map(l => l.trim()).filter(Boolean);
+    const lines = p.split('\n');
     if (lines.length === 0) continue;
     const title = lines[0].replace(/^#{1,6}\s*/, '').trim();
-    const desc = lines.slice(1).join('\n').trim();
+    // preserve the description exactly as written (keep blank lines and trailing newlines)
+    const desc = lines.slice(1).join('\n');
     if (title) map[title] = { title, desc, raw: p };
   }
   return map;
 }
 
 function composeSection(title, desc) {
-  return `## ${title}\n\n${desc || ''}`.trim();
+  // preserve trailing newlines/whitespace in the section body
+  return `## ${title}\n\n${desc || ''}`;
 }
 
 /*
@@ -183,14 +247,14 @@ function composeSection(title, desc) {
 */
 function parseEntitySectionsArray(raw) {
   if (!raw || !raw.trim()) return [];
-  const parts = raw.split(/\n(?=##\s+)/g).map(p => p.trim()).filter(Boolean);
+  const parts = raw.split(/\n(?=##\s+)/g).filter(Boolean);
   const arr = [];
   for (const p of parts) {
     const lines = p.split('\n');
     if (lines.length === 0) continue;
-    const titleLine = lines[0].trim();
+    const titleLine = lines[0];
     const title = titleLine.replace(/^#{1,6}\s*/, '').trim();
-    const desc = lines.slice(1).join('\n').trim();
+    const desc = lines.slice(1).join('\n');
     if (title) arr.push({ title, desc, raw: p });
   }
   return arr;
@@ -249,7 +313,7 @@ function simpleMarkdownToHtml(md) {
       html += `<li>${content}</li>`;
       continue;
     } else {
-      if (inList) { html += '</ul>'; inList = false; }
+      if (inList) { html += '</ul>'; inList = false }
     }
 
     // images on their own line or inline
@@ -291,7 +355,7 @@ function countOccurrences(text, name) {
 async function refreshStories() {
   const res = await api.listStories();
   if (!res || !res.ok) return;
-  storyList.innerHTML = '';
+ storyList.innerHTML = '';
   for (const s of res.stories) {
     const li = document.createElement('li');
     li.className = 'story-item';
@@ -318,8 +382,7 @@ async function refreshStories() {
           currentStoryTitle.textContent = 'No story opened';
           editor.value = '';
           preview.innerHTML = '';
-          characterList.innerHTML = '';
-          locationList.innerHTML = '';
+          if (highlightList) highlightList.innerHTML = '';
           setEditorEnabled(false);
         }
         await refreshStories();
@@ -380,8 +443,7 @@ closeStoryBtn.addEventListener('click', () => {
   state.storyData = null;
   currentStoryTitle.textContent = 'No story opened';
   editor.value = '';
-  characterList.innerHTML = '';
-  locationList.innerHTML = '';
+  if (highlightList) highlightList.innerHTML = '';
   // disable editor area when no story is open
   setEditorEnabled(false);
 });
@@ -426,28 +488,46 @@ async function saveMainText() {
     return;
   }
 
-  // saving an entity (characters.md or locations.md) — merge edited section into the existing file (preserving other sections)
-  const filename = view === 'characters' ? 'characters.md' : 'locations.md';
-  const raw = (state.storyData && state.storyData[view]) ? state.storyData[view] : '';
+  // saving an entity (highlights.md) — merge edited section into the existing file (preserving other sections)
+  const filename = 'highlights.md';
+  const raw = (state.storyData && state.storyData.highlights) ? state.storyData.highlights : '';
   const arr = parseEntitySectionsArray(raw);
 
   // parse the editor content which should be in the form "## Name\n\nDescription..."
-  const editedRaw = (editor.value || '').trim();
+  // IMPORTANT: do not trim the full editor content — preserve trailing newlines and cursor position.
+  const editedRaw = (editor.value || '');
   const lines = editedRaw.split(/\r?\n/);
   let editedTitle = state.currentView && state.currentView.name ? state.currentView.name : null;
   let editedDesc = '';
 
   if (lines.length > 0 && lines[0].match(/^#{1,6}\s+/)) {
+    // title: trim only the heading text, but keep the description verbatim (no .trim())
     editedTitle = lines[0].replace(/^#{1,6}\s+/, '').trim();
-    editedDesc = lines.slice(1).join('\n').trim();
+    editedDesc = lines.slice(1).join('\n');
   } else {
-    // no explicit heading — treat entire content as description
+    // no explicit heading — treat entire content as description (preserve whitespace)
     editedDesc = editedRaw;
   }
 
   if (!editedTitle) {
     console.warn('saveMainText: cannot determine entity title; aborting save');
     return;
+  }
+
+  // Avoid unnecessary saves that reset content/cursor:
+  // Compare the current in-editor description with the one stored on disk for this entity.
+  // If identical (including trailing newlines), skip saving entirely.
+  try {
+    const storedMap = parseEntitySections(raw);
+    const storedEntry = storedMap[editedTitle];
+    const storedDesc = storedEntry ? storedEntry.desc : '';
+    if (storedDesc === editedDesc) {
+      // nothing changed — skip network call and avoid touching editor/state
+      console.debug('[debug] saveMainText: no changes detected for', editedTitle, '- skipping save');
+      return;
+    }
+  } catch (e) {
+    console.warn('saveMainText: compare failed, proceeding to save', e);
   }
 
   // find index by original name (supports renames), otherwise by title, otherwise append
@@ -482,17 +562,14 @@ async function saveMainText() {
     return;
   }
 
-  // refresh story data and keep the same entity open (use canonical title)
+  // refresh story data but do NOT overwrite the editor value or reset the cursor.
+  // Preserve state.currentView if possible; update storyData so counts/tooltips refresh.
   const updated = await api.getStory(state.currentStory);
   if (updated && updated.ok) {
     state.storyData = updated;
-    const latestArr = parseEntitySectionsArray(state.storyData[view] || '');
-    const entry = latestArr.find(s => s.title === editedTitle) || { title: editedTitle, desc: editedDesc };
-    state.currentView = { type: view, name: entry.title };
-    editor.value = composeSection(entry.title, entry.desc);
   }
   refreshEntityLists();
-  console.log('Saved', filename, 'and kept editing', editedTitle);
+  console.log('Saved', filename, 'without disturbing the editor for', editedTitle);
 }
 
 function scheduleAutoSave(delay = 500) {
@@ -522,12 +599,10 @@ document.addEventListener('keydown', (e) => {
    // - If caller provided an override (e.g. while typing in main text), use it.
    // - Otherwise use the stored story main text from state.storyData.
    const mainText = (typeof mainTextOverride !== 'undefined') ? mainTextOverride : ((state.storyData && state.storyData.text) ? state.storyData.text : '');
-   const chars = parseEntitySections(state.storyData && state.storyData.characters ? state.storyData.characters : '');
-   const locs = parseEntitySections(state.storyData && state.storyData.locations ? state.storyData.locations : '');
+   const hls = parseEntitySections(state.storyData && state.storyData.highlights ? state.storyData.highlights : '');
    const text = mainText || '';
 
-  const charArr = Object.keys(chars).map(n => ({ name: n, count: countOccurrences(text, n) }));
-  const locArr = Object.keys(locs).map(n => ({ name: n, count: countOccurrences(text, n) }));
+  const hlArr = Object.keys(hls).map(n => ({ name: n, count: countOccurrences(text, n) }));
 
   function renderList(arr, container, type, sortMode) {
     if (sortMode === 'alpha') arr.sort((a, b) => a.name.localeCompare(b.name));
@@ -542,16 +617,15 @@ document.addEventListener('keydown', (e) => {
     }
   }
 
-  renderList(charArr, characterList, 'characters', charSort.value || 'alpha');
-  renderList(locArr, locationList, 'locations', locSort.value || 'alpha');
+  // render highlights
+  if (highlightList) renderList(hlArr, highlightList, 'highlights', hlSort && hlSort.value ? hlSort.value : 'alpha');
 
   // re-render preview to refresh highlights
   renderPreview();
 }
 
  // sort change handlers
- charSort.addEventListener('change', () => refreshEntityLists());
- locSort.addEventListener('change', () => refreshEntityLists());
+ if (hlSort) hlSort.addEventListener('change', () => refreshEntityLists());
 
 /* Improved preview rendering: render markdown then wrap ALL entity occurrences (multi-match, multi-word, longest-first).
    NOTE: renderPreview now renders markdown even when no story is opened so the right pane always shows live preview. */
@@ -615,20 +689,11 @@ function renderPreview() {
     console.log('[debug] preview rendered, html length=', (html || '').length, 'childNodes=', preview.childNodes.length, 'data-render-debug=', preview.getAttribute('data-render-debug'));
 
     // derive entities from state if available, otherwise empty lists
-    const chars = Object.keys(parseEntitySections((state.storyData && state.storyData.characters) || ''));
-    const locs = Object.keys(parseEntitySections((state.storyData && state.storyData.locations) || ''));
+    const hls = Object.keys(parseEntitySections((state.storyData && state.storyData.highlights) || ''));
 
-    // build combined list (characters first) and sort by length desc to prefer longest match
-    const combined = chars.map(n => ({ name: n, cls: 'entity-char' }))
-      .concat(locs.map(n => ({ name: n, cls: 'entity-loc' })))
+    // build combined list (highlights) and sort by length desc to prefer longest match
+    const combined = hls.map(n => ({ name: n, cls: 'entity-hl' }))
       .sort((a, b) => b.name.length - a.name.length);
-
-    // if there are no entities defined yet, still show rendered markdown but skip highlighting
-    // (don't return early — highlight loop below will be skipped when combined is empty)
-    // if (combined.length === 0) {
-    //   // nothing to highlight
-    //   return;
-    // }
 
     // walk text nodes and replace all non-overlapping matches found for combined names
     walkTextNodes(preview, (textNode) => {
@@ -670,7 +735,7 @@ function renderPreview() {
         a.textContent = mt.text;
         a.href = 'javascript:void(0)';
         a.dataset.entityName = mt.name;
-        a.dataset.entityType = mt.cls === 'entity-char' ? 'characters' : 'locations';
+        a.dataset.entityType = 'highlights';
         frag.appendChild(a);
         cursor = mt.index + mt.length;
       }
@@ -678,8 +743,11 @@ function renderPreview() {
       parent.replaceChild(frag, textNode);
     });
 
+    // render tags (#tag) as pastel pills
+    renderTags(preview);
+
     // attach hover and click handlers
-    preview.querySelectorAll('a.entity-char, a.entity-loc').forEach(a => {
+    preview.querySelectorAll('a.entity-hl').forEach(a => {
       a.addEventListener('mouseover', onEntityHover);
       a.addEventListener('mouseout', onEntityOut);
       a.addEventListener('click', (ev) => {
@@ -789,8 +857,8 @@ function onEntityOut() {
 function openEntityEditor(type, name) {
   if (!state.currentStory) return alert('Open a story first');
   currentEditing = { type, name };
-  entityModalTitle.textContent = `${type === 'characters' ? 'Character' : 'Location'}: ${name}`;
-  const raw = state.storyData[type] || '';
+  entityModalTitle.textContent = `Highlight: ${name}`;
+  const raw = state.storyData && state.storyData.highlights ? state.storyData.highlights : '';
   const map = parseEntitySections(raw);
   const entry = map[name];
   entityContent.value = entry ? entry.desc : '';
@@ -803,7 +871,7 @@ closeEntityBtn.addEventListener('click', () => entityModal.classList.add('hidden
 function openEntityInEditor(type, name) {
   if (!state.currentStory) return alert('Open a story first');
   state.currentView = { type, name };
-  const raw = state.storyData[type] || '';
+  const raw = state.storyData && state.storyData.highlights ? state.storyData.highlights : '';
   const map = parseEntitySections(raw);
   const entry = map[name] || { title: name, desc: '' };
   // load the entity as markdown into the editor so it behaves like the main text
@@ -814,15 +882,15 @@ function openEntityInEditor(type, name) {
 saveEntityBtn.addEventListener('click', async () => {
   if (!currentEditing || !currentEditing.name) return;
   const { type, name } = currentEditing;
-  const filename = type === 'characters' ? 'characters.md' : 'locations.md';
-  const raw = state.storyData[type] || '';
+  const filename = 'highlights.md';
+  const raw = state.storyData && state.storyData.highlights ? state.storyData.highlights : '';
   const map = parseEntitySections(raw);
-  map[name] = { title: name, desc: (entityContent.value || '').trim() };
+  map[name] = { title: name, desc: (entityContent.value || '') };
 
   // if an image was selected, upload it to the story images and then proceed
   const file = entityImageInput.files[0];
   if (file) {
-    const up = await api.uploadImage(state.currentStory, type, file);
+    const up = await api.uploadImage(state.currentStory, 'highlights', file);
     if (!up || !up.ok) return alert(up && up.error ? up.error : 'Image upload failed');
     // refresh state to include the new image
     const updated = await api.getStory(state.currentStory);
@@ -873,28 +941,15 @@ editor.addEventListener('contextmenu', (ev) => {
   customContextEl.style.left = ev.pageX + 'px';
   customContextEl.style.top = ev.pageY + 'px';
 
-  const btnChar = document.createElement('button');
-  btnChar.textContent = `Make "${selected}" a Character`;
-  btnChar.addEventListener('click', async () => {
+  const btnHl = document.createElement('button');
+  btnHl.textContent = `Make "${selected}" a Highlight`;
+  btnHl.addEventListener('click', async () => {
     if (!state.currentStory) { alert('Open a story first'); return; }
     try {
-      await createEntityAndOpen('characters', selected);
+      await createEntityAndOpen('highlights', selected);
     } catch (err) {
       console.error('createEntityAndOpen error', err);
-      alert('Failed to create/open character');
-    }
-    if (customContextEl) customContextEl.remove();
-  });
-
-  const btnLoc = document.createElement('button');
-  btnLoc.textContent = `Make "${selected}" a Location`;
-  btnLoc.addEventListener('click', async () => {
-    if (!state.currentStory) { alert('Open a story first'); return; }
-    try {
-      await createEntityAndOpen('locations', selected);
-    } catch (err) {
-      console.error('createEntityAndOpen error', err);
-      alert('Failed to create/open location');
+      alert('Failed to create/open highlight');
     }
     if (customContextEl) customContextEl.remove();
   });
@@ -907,8 +962,7 @@ editor.addEventListener('contextmenu', (ev) => {
     if (customContextEl) customContextEl.remove();
   });
 
-  customContextEl.appendChild(btnChar);
-  customContextEl.appendChild(btnLoc);
+  customContextEl.appendChild(btnHl);
   customContextEl.appendChild(btnUpload);
   document.body.appendChild(customContextEl);
 });
@@ -923,17 +977,17 @@ document.addEventListener('click', (e) => {
 
 function openNewEntityModal(type, name) {
   currentEditing = { type, name };
-  entityModalTitle.textContent = `${type === 'characters' ? 'New character' : 'New location'}: ${name}`;
+  entityModalTitle.textContent = `New highlight: ${name}`;
   entityContent.value = '';
   entityImageInput.value = '';
   entityModal.classList.remove('hidden');
 }
 
 async function createEntityAndOpen(type, name) {
-  // create the entity entry (if missing) in the appropriate file, refresh state, then open it in editor
+  // create the entity entry (if missing) in the highlights.md file, refresh state, then open it in editor
   if (!state.currentStory) throw new Error('Open a story first');
-  const filename = type === 'characters' ? 'characters.md' : 'locations.md';
-  const raw = state.storyData && state.storyData[type] ? state.storyData[type] : '';
+  const filename = 'highlights.md';
+  const raw = state.storyData && state.storyData.highlights ? state.storyData.highlights : '';
   const map = parseEntitySections(raw);
 
   // if already exists, just open it
@@ -953,12 +1007,12 @@ async function createEntityAndOpen(type, name) {
   }
 
   // load it into the main editor and render
-  openEntityInEditor(type, name);
+  openEntityInEditor('highlights', name);
 }
 
 // clicking highlighted entity opens editor (delegation)
 preview.addEventListener('click', (ev) => {
-  const a = ev.target.closest('a.entity-char, a.entity-loc');
+  const a = ev.target.closest('a.entity-hl');
   if (!a) return;
   const name = a.dataset.entityName;
   const type = a.dataset.entityType;
@@ -969,10 +1023,10 @@ preview.addEventListener('click', (ev) => {
 preview.addEventListener('contextmenu', (ev) => {
   ev.preventDefault();
   if (!state.currentStory) return;
-  const a = ev.target.closest('a.entity-char, a.entity-loc');
+  const a = ev.target.closest('a.entity-hl');
   if (!a) return;
   const ename = a.dataset.entityName;
-  const etype = a.dataset.entityType; // 'characters' or 'locations'
+  const etype = a.dataset.entityType; // 'highlights'
 
   if (customContextEl) customContextEl.remove();
   customContextEl = document.createElement('div');
