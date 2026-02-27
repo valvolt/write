@@ -101,3 +101,16 @@ a.entity-loc{color:var(--accent-green);text-decoration:underline;cursor:pointer}
   transform:translateY(-1px);
   border:1px solid rgba(0,0,0,0.06);
 }
+
+/* explicit classes for sidebar story states so JS can toggle them reliably */
+.story-item--muted {
+  color: var(--muted) !important;
+  opacity: 0.9;
+}
+.story-item--active {
+  font-weight: 600 !important;
+  color: #111 !important;
+  background: rgba(30,144,255,0.06);
+  border-radius: 4px;
+  padding: 2px 4px;
+}

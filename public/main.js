@@ -382,6 +382,20 @@ async function refreshStories() {
     const nameSpan = document.createElement('span');
     nameSpan.textContent = s;
     nameSpan.dataset.name = s;
+    // apply explicit classes so styling is consistent and easy to override
+    if (state.currentStory) {
+      if (state.currentStory !== s) {
+        nameSpan.classList.add('story-item--muted');
+        nameSpan.classList.remove('story-item--active');
+      } else {
+        nameSpan.classList.add('story-item--active');
+        nameSpan.classList.remove('story-item--muted');
+      }
+    } else {
+      // no story open: ensure all items are in the default state
+      nameSpan.classList.remove('story-item--muted');
+      nameSpan.classList.remove('story-item--active');
+    }
     nameSpan.addEventListener('click', () => openStory(s));
     li.appendChild(nameSpan);
 
@@ -466,6 +480,8 @@ closeStoryBtn.addEventListener('click', () => {
   if (highlightList) highlightList.innerHTML = '';
   // disable editor area when no story is open
   setEditorEnabled(false);
+  // refresh the stories list so the left menu updates (non-open stories appear grey)
+  refreshStories();
 });
 
 // --- Open / Save story ---
@@ -485,6 +501,8 @@ async function openStory(name) {
   editor.value = res.text || '';
   renderPreview();
   refreshEntityLists();
+  // update sidebar to reflect the currently open story
+  refreshStories();
 }
 
 saveBtn.addEventListener('click', saveMainText);
