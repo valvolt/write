@@ -1,5 +1,7 @@
 # Writer — Local Story Editor
 
+![Main UI](writer.png)
+
 A small editor for story writers. Because I felt **Scrivener** and **Manuskript** too feature-rich for my taste.
 
 Primarily made to be used offline on your local machine.
