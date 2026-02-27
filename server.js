@@ -42,12 +42,28 @@ function ensureStoryStructure(name) {
       fs.writeFileSync(fp, '', 'utf8');
     }
   }
+
+  // create images subfolders (text/highlights)
   const imgs = path.join(base, 'images');
-  const sub = ['highlights', 'text'];
-  for (const s of sub) {
+  const imgSub = ['highlights', 'text'];
+  for (const s of imgSub) {
     const p = path.join(imgs, s);
     if (!fs.existsSync(p)) {
       fs.mkdirSync(p, { recursive: true });
+    }
+  }
+
+  // create tiles folder and minimal tiles.json (ordered array of {id,title})
+  const tilesDir = path.join(base, 'tiles');
+  if (!fs.existsSync(tilesDir)) {
+    fs.mkdirSync(tilesDir, { recursive: true });
+  }
+  const tilesMeta = path.join(tilesDir, 'tiles.json');
+  if (!fs.existsSync(tilesMeta)) {
+    try {
+      fs.writeFileSync(tilesMeta, JSON.stringify([], null, 2), 'utf8');
+    } catch (e) {
+      // ignore write errors here; higher-level handlers will surface problems
     }
   }
 }
@@ -124,24 +140,162 @@ app.get('/api/stories/:name', (req, res) => {
   }
 });
 
-// Save text/characters/locations
-app.post('/api/stories/:name/save', (req, res) => {
-  const name = req.params.name;
-  const { file, content } = req.body || {};
-  if (!file || !content) {
-    return res.status(400).json({ ok: false, error: 'file and content required' });
-  }
-  if (!['text.md', 'highlights.md'].includes(file)) {
-    return res.status(400).json({ ok: false, error: 'invalid file' });
-  }
-  const base = storyPath(name);
-  if (!fs.existsSync(base)) return res.status(404).json({ ok: false, error: 'story not found' });
-  try {
-    fs.writeFileSync(path.join(base, file), content, 'utf8');
-    res.json({ ok: true });
-  } catch (err) {
-    res.status(500).json({ ok: false, error: err.message });
-  }
+ // Tiles API: minimal per-story tile storage (stories/<name>/tiles/, stories/<name>/tiles/tiles.json)
+ app.get('/api/stories/:name/tiles', (req, res) => {
+   const name = req.params.name;
+   const base = storyPath(name);
+   if (!fs.existsSync(base)) return res.status(404).json({ ok: false, error: 'story not found' });
+   try {
+     const tilesDir = path.join(base, 'tiles');
+     const metaPath = path.join(tilesDir, 'tiles.json');
+     let tiles = [];
+     if (fs.existsSync(metaPath)) {
+       try { tiles = JSON.parse(fs.readFileSync(metaPath, 'utf8') || '[]'); } catch (e) { tiles = []; }
+     }
+     res.json({ ok: true, tiles });
+   } catch (err) {
+     res.status(500).json({ ok: false, error: err.message });
+   }
+ });
+
+ // Create a new tile
+ app.post('/api/stories/:name/tiles', (req, res) => {
+   const name = req.params.name;
+   const { title, content } = req.body || {};
+   const base = storyPath(name);
+   // ensure story exists (create structure if missing) so tile creation works reliably
+   if (!fs.existsSync(base)) {
+     try {
+       ensureStoryStructure(name);
+     } catch (e) {
+       return res.status(500).json({ ok: false, error: 'failed to create story structure' });
+     }
+   }
+   try {
+     const tilesDir = path.join(base, 'tiles');
+     if (!fs.existsSync(tilesDir)) fs.mkdirSync(tilesDir, { recursive: true });
+     const metaPath = path.join(tilesDir, 'tiles.json');
+     let tiles = [];
+     if (fs.existsSync(metaPath)) {
+       try { tiles = JSON.parse(fs.readFileSync(metaPath, 'utf8') || '[]'); } catch (e) { tiles = []; }
+     }
+     const id = String(Date.now()) + '-' + Math.floor(Math.random() * 10000);
+     const safeId = safeName(id);
+     const filename = path.join(tilesDir, safeId + '.md');
+     fs.writeFileSync(filename, content || '', 'utf8');
+     const entry = { id: safeId, title: (title || '') };
+     tiles.push(entry);
+     fs.writeFileSync(metaPath, JSON.stringify(tiles, null, 2), 'utf8');
+     res.json({ ok: true, id: safeId, tile: entry });
+   } catch (err) {
+     res.status(500).json({ ok: false, error: err.message });
+   }
+ });
+
+ // Get single tile content
+ app.get('/api/stories/:name/tiles/:id', (req, res) => {
+   const name = req.params.name;
+   const id = req.params.id;
+   const base = storyPath(name);
+   if (!fs.existsSync(base)) return res.status(404).json({ ok: false, error: 'story not found' });
+   try {
+     const tilesDir = path.join(base, 'tiles');
+     const metaPath = path.join(tilesDir, 'tiles.json');
+     let tiles = [];
+     if (fs.existsSync(metaPath)) {
+       try { tiles = JSON.parse(fs.readFileSync(metaPath, 'utf8') || '[]'); } catch (e) { tiles = []; }
+     }
+     const meta = tiles.find(t => t.id === id) || { id, title: '' };
+     const filename = path.join(tilesDir, id + '.md');
+     let content = '';
+     if (fs.existsSync(filename)) {
+       content = fs.readFileSync(filename, 'utf8');
+     }
+     res.json({ ok: true, id: meta.id, title: meta.title, content });
+   } catch (err) {
+     res.status(500).json({ ok: false, error: err.message });
+   }
+ });
+
+ // Save tile content
+ app.post('/api/stories/:name/tiles/:id/save', (req, res) => {
+   const name = req.params.name;
+   const id = req.params.id;
+   const { content } = req.body || {};
+   if (typeof content !== 'string') return res.status(400).json({ ok: false, error: 'content required' });
+   const base = storyPath(name);
+   if (!fs.existsSync(base)) return res.status(404).json({ ok: false, error: 'story not found' });
+   try {
+     const tilesDir = path.join(base, 'tiles');
+     const filename = path.join(tilesDir, id + '.md');
+     fs.writeFileSync(filename, content, 'utf8');
+     res.json({ ok: true });
+   } catch (err) {
+     res.status(500).json({ ok: false, error: err.message });
+   }
+ });
+
+ // Reorder or update titles (body: { order: [{id,title}, ...] } )
+ app.post('/api/stories/:name/tiles/reorder', (req, res) => {
+   const name = req.params.name;
+   const order = Array.isArray(req.body && req.body.order) ? req.body.order : null;
+   if (!order) return res.status(400).json({ ok: false, error: 'order required' });
+   const base = storyPath(name);
+   if (!fs.existsSync(base)) return res.status(404).json({ ok: false, error: 'story not found' });
+   try {
+     const tilesDir = path.join(base, 'tiles');
+     if (!fs.existsSync(tilesDir)) fs.mkdirSync(tilesDir, { recursive: true });
+     const metaPath = path.join(tilesDir, 'tiles.json');
+     // normalize to objects with id and title
+     const normalized = order.map(o => (typeof o === 'string' ? { id: safeName(o), title: '' } : { id: safeName(String(o.id || '')), title: String(o.title || '') }));
+     fs.writeFileSync(metaPath, JSON.stringify(normalized, null, 2), 'utf8');
+     res.json({ ok: true, tiles: normalized });
+   } catch (err) {
+     res.status(500).json({ ok: false, error: err.message });
+   }
+ });
+
+ // Delete tile
+ app.delete('/api/stories/:name/tiles/:id', (req, res) => {
+   const name = req.params.name;
+   const id = req.params.id;
+   const base = storyPath(name);
+   if (!fs.existsSync(base)) return res.status(404).json({ ok: false, error: 'story not found' });
+   try {
+     const tilesDir = path.join(base, 'tiles');
+     const metaPath = path.join(tilesDir, 'tiles.json');
+     let tiles = [];
+     if (fs.existsSync(metaPath)) {
+       try { tiles = JSON.parse(fs.readFileSync(metaPath, 'utf8') || '[]'); } catch (e) { tiles = []; }
+     }
+     const newTiles = tiles.filter(t => t.id !== id);
+     fs.writeFileSync(metaPath, JSON.stringify(newTiles, null, 2), 'utf8');
+     const filename = path.join(tilesDir, id + '.md');
+     if (fs.existsSync(filename)) fs.unlinkSync(filename);
+     res.json({ ok: true });
+   } catch (err) {
+     res.status(500).json({ ok: false, error: err.message });
+   }
+ });
+
+ // Save text/characters/locations
+ app.post('/api/stories/:name/save', (req, res) => {
+   const name = req.params.name;
+   const { file, content } = req.body || {};
+   if (!file || !content) {
+     return res.status(400).json({ ok: false, error: 'file and content required' });
+   }
+   if (!['text.md', 'highlights.md'].includes(file)) {
+     return res.status(400).json({ ok: false, error: 'invalid file' });
+   }
+   const base = storyPath(name);
+   if (!fs.existsSync(base)) return res.status(404).json({ ok: false, error: 'story not found' });
+   try {
+     fs.writeFileSync(path.join(base, file), content, 'utf8');
+     res.json({ ok: true });
+   } catch (err) {
+     res.status(500).json({ ok: false, error: err.message });
+   }
 });
 
 // multer storage: destination depends on story and type field

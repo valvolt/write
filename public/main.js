@@ -21,12 +21,34 @@ const api = {
     body: JSON.stringify({ newName })
   }).then(r => r.json()),
   deleteStory: (name) => fetch(`/api/stories/${encodeURIComponent(name)}`, { method: 'DELETE' }).then(r => r.json()),
+
+  // images
   uploadImage: (name, type, file) => {
     const fd = new FormData();
     fd.append('file', file);
     fd.append('type', type);
     return fetch(`/api/stories/${encodeURIComponent(name)}/images`, { method: 'POST', body: fd }).then(r => r.json());
-  }
+  },
+
+  // tiles API
+  listTiles: (name) => fetch(`/api/stories/${encodeURIComponent(name)}/tiles`).then(r => r.json()),
+  createTile: (name, title, content = '') => fetch(`/api/stories/${encodeURIComponent(name)}/tiles`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ title, content })
+  }).then(r => r.json()),
+  getTile: (name, id) => fetch(`/api/stories/${encodeURIComponent(name)}/tiles/${encodeURIComponent(id)}`).then(r => r.json()),
+  saveTile: (name, id, content) => fetch(`/api/stories/${encodeURIComponent(name)}/tiles/${encodeURIComponent(id)}/save`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+ body: JSON.stringify({ content })
+  }).then(r => r.json()),
+  deleteTile: (name, id) => fetch(`/api/stories/${encodeURIComponent(name)}/tiles/${encodeURIComponent(id)}`, { method: 'DELETE' }).then(r => r.json()),
+  reorderTiles: (name, order) => fetch(`/api/stories/${encodeURIComponent(name)}/tiles/reorder`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ order })
+  }).then(r => r.json())
 };
 
 // --- state ---
@@ -58,6 +80,11 @@ const renameInput = $('#renameInput');
 const renameBtn = $('#renameBtn');
 const closeStoryBtn = $('#closeStoryBtn');
 
+const tilesSection = $('#tilesSection');
+const newTileTitle = $('#newTileTitle');
+const createTileBtn = $('#createTileBtn');
+const tileList = $('#tileList');
+
 const highlightList = $('#highlightList');
 const hlSort = $('#hlSort');
 // hide the save button — we autosave on input so the button is now optional
@@ -74,12 +101,17 @@ function setEditorEnabled(enabled) {
   // enable/disable the main editor and adjust preview/save controls
   try {
     if (!editor) return;
+    // Use both disabled and readOnly to ensure the editor cannot be edited when disabled.
+    // disabled prevents focus/interaction; readOnly ensures no accidental edits if styling changes.
     editor.disabled = !enabled;
+    editor.readOnly = !enabled;
     if (enabled) {
       editor.classList.remove('disabled');
+      editor.classList.remove('readonly');
       editor.placeholder = editor.placeholder && editor.placeholder === 'No story opened' ? 'Write your story here...' : editor.placeholder;
     } else {
       editor.classList.add('disabled');
+      editor.classList.add('readonly');
       editor.placeholder = 'No story opened';
       // clear preview when disabled
       if (preview) preview.innerHTML = '';
@@ -441,12 +473,49 @@ createStoryBtn.addEventListener('click', async () => {
   openStory(res.name);
 });
 
-/* Inline rename handled by clicking the title (currentStoryTitle). Sidebar rename removed. */
-currentStoryTitle.addEventListener('click', () => {
+/* Single-click on the story title shows the concatenated, read-only content of all tiles.
+   Double-click enters inline rename mode (preserves the previous behavior). */
+currentStoryTitle.addEventListener('click', async () => {
+  if (!state.currentStory) return;
+  // fetch tiles in order and render concatenated markdown in the preview (read-only)
+  try {
+    // ensure tiles area visible and up to date
+    if (tilesSection) tilesSection.style.display = 'block';
+    const listRes = await api.listTiles(state.currentStory);
+    if (!listRes || !listRes.ok) {
+      console.warn('listTiles failed', listRes && listRes.error);
+      return;
+    }
+    const tiles = listRes.tiles || [];
+    let combined = '';
+    for (const t of tiles) {
+      try {
+        const tileRes = await api.getTile(state.currentStory, t.id);
+        if (tileRes && tileRes.ok) combined += (tileRes.content || '') + '\n\n';
+      } catch (e) {
+        console.warn('failed to load tile', t.id, e);
+      }
+    }
+    // render into preview and disable the editor (read-only mode)
+    const html = (typeof marked !== 'undefined' && marked && typeof marked.parse === 'function')
+      ? (marked.parse(combined || ''))
+      : simpleMarkdownToHtml(combined || '');
+    // make the editor read-only (preserve the rendered preview)
+    setEditorEnabled(false);
+    preview.innerHTML = html || '<div class="empty-preview">[no tiles]</div>';
+    state.currentView = { type: 'full' };
+  } catch (e) {
+    console.error('show full tiles failed', e);
+  }
+});
+
+// double-click to rename (preserves previous rename UX)
+currentStoryTitle.addEventListener('dblclick', () => {
   if (!state.currentStory) return;
   currentStoryTitle.contentEditable = 'true';
   currentStoryTitle.focus();
 });
+
 currentStoryTitle.addEventListener('keydown', async (e) => {
   if (e.key === 'Enter') { e.preventDefault(); currentStoryTitle.blur(); }
   else if (e.key === 'Escape') {
@@ -478,6 +547,8 @@ closeStoryBtn.addEventListener('click', () => {
   currentStoryTitle.textContent = 'No story opened';
   editor.value = '';
   if (highlightList) highlightList.innerHTML = '';
+  // hide tiles area
+  if (tilesSection) tilesSection.style.display = 'none';
   // disable editor area when no story is open
   setEditorEnabled(false);
   // refresh the stories list so the left menu updates (non-open stories appear grey)
@@ -503,6 +574,9 @@ async function openStory(name) {
   refreshEntityLists();
   // update sidebar to reflect the currently open story
   refreshStories();
+  // show tiles area and load tiles
+  if (tilesSection) tilesSection.style.display = 'block';
+  try { await refreshTiles(); } catch (e) { console.warn('refreshTiles failed', e); }
 }
 
 saveBtn.addEventListener('click', saveMainText);
@@ -511,6 +585,27 @@ async function saveMainText() {
   if (!state.currentStory) return;
   // determine which file we're saving to
   const view = state.currentView && state.currentView.type ? state.currentView.type : 'text';
+
+  // saving a tile
+  if (view === 'tile') {
+    const id = state.currentView && state.currentView.id;
+    if (!id) return console.warn('saveMainText: no tile id');
+    const content = editor.value;
+    const res = await api.saveTile(state.currentStory, id, content);
+    if (!res || !res.ok) {
+      console.warn('saveMainText: failed to save tile', res && res.error);
+      return;
+    }
+    // refresh tiles metadata and counts
+    try {
+      const updated = await api.getStory(state.currentStory);
+      if (updated && updated.ok) state.storyData = updated;
+    } catch (e) {}
+    await refreshTiles();
+    console.log('Saved tile', id);
+    return;
+  }
+
   if (view === 'text') {
     // saving main story text (replace entire text.md)
     const content = editor.value;
@@ -840,6 +935,185 @@ document.addEventListener('keydown', (e) => {
 
  // sort change handlers
  if (hlSort) hlSort.addEventListener('change', () => refreshEntityLists());
+
+/* --- Tiles UI & handlers --- */
+async function refreshTiles() {
+  if (!state.currentStory) return;
+  if (!tileList) return;
+  try {
+    const res = await api.listTiles(state.currentStory);
+    if (!res || !res.ok) return;
+    const tiles = res.tiles || [];
+    tileList.innerHTML = '';
+    for (const t of tiles) {
+      const li = document.createElement('li');
+      li.className = 'tile-item';
+      li.dataset.id = t.id;
+      li.draggable = true;
+      li.style.display = 'flex';
+      li.style.alignItems = 'center';
+      li.style.justifyContent = 'space-between';
+      li.style.gap = '8px';
+      li.style.padding = '6px';
+      li.style.borderRadius = '4px';
+      li.style.cursor = 'grab';
+
+      const titleSpan = document.createElement('span');
+      titleSpan.textContent = t.title || '(untitled)';
+      titleSpan.style.flex = '1';
+      titleSpan.style.minWidth = '0';
+      titleSpan.addEventListener('click', async () => {
+        // open tile in editor
+        const got = await api.getTile(state.currentStory, t.id);
+        if (!got || !got.ok) return alert(got && got.error ? got.error : 'Failed to load tile');
+        state.currentView = { type: 'tile', id: t.id };
+        editor.value = got.content || '';
+        setEditorEnabled(true);
+        renderPreview();
+      });
+
+      const actions = document.createElement('div');
+      actions.style.display = 'flex';
+      actions.style.gap = '6px';
+      actions.style.alignItems = 'center';
+
+      const renameBtn = document.createElement('button');
+      renameBtn.textContent = 'Rename';
+      renameBtn.addEventListener('click', async (ev) => {
+        ev.stopPropagation();
+        const newTitle = prompt('New tile title', t.title || '');
+        if (newTitle === null) return;
+        // update tiles order with new title
+        const cur = (await api.listTiles(state.currentStory)).tiles || [];
+        const updated = cur.map(x => x.id === t.id ? { id: x.id, title: newTitle } : x);
+        const rr = await api.reorderTiles(state.currentStory, updated);
+        if (!rr || !rr.ok) return alert(rr && rr.error ? rr.error : 'Rename failed');
+        await refreshTiles();
+      });
+      actions.appendChild(renameBtn);
+
+      const delBtn = document.createElement('button');
+      delBtn.textContent = 'Delete';
+      delBtn.addEventListener('click', async (ev) => {
+        ev.stopPropagation();
+        if (!confirm(`Delete tile "${t.title || t.id}"? This cannot be undone.`)) return;
+        const rr = await api.deleteTile(state.currentStory, t.id);
+        if (!rr || !rr.ok) return alert(rr && rr.error ? rr.error : 'Delete failed');
+        // if currently editing this tile, close editor
+        if (state.currentView && state.currentView.type === 'tile' && state.currentView.id === t.id) {
+          state.currentView = { type: 'text', name: null };
+          editor.value = state.storyData && state.storyData.text ? state.storyData.text : '';
+          renderPreview();
+        }
+        await refreshTiles();
+      });
+      actions.appendChild(delBtn);
+
+      li.appendChild(titleSpan);
+      li.appendChild(actions);
+
+      // drag handlers with visual insertion indicators
+      li.addEventListener('dragstart', (e) => {
+        e.dataTransfer.setData('text/plain', t.id);
+        e.dataTransfer.effectAllowed = 'move';
+        li.style.opacity = '0.5';
+        // mark dragged item
+        li.classList.add('dragging');
+      });
+      li.addEventListener('dragend', (e) => {
+        li.style.opacity = '1';
+        li.classList.remove('dragging');
+        // clear any leftover drop indicators
+        Array.from(tileList.children).forEach(n => {
+          n.classList.remove('drop-before', 'drop-after');
+        });
+      });
+
+      li.addEventListener('dragenter', (e) => {
+        e.preventDefault();
+        const draggedId = e.dataTransfer.getData('text/plain');
+        if (!draggedId) return;
+        if (draggedId === t.id) return;
+        // decide before/after based on mouse position
+        const rect = li.getBoundingClientRect();
+        const y = e.clientY - rect.top;
+        if (y < rect.height / 2) {
+          li.classList.add('drop-before');
+          li.classList.remove('drop-after');
+        } else {
+          li.classList.add('drop-after');
+          li.classList.remove('drop-before');
+        }
+      });
+
+      li.addEventListener('dragover', (e) => {
+        e.preventDefault();
+        e.dataTransfer.dropEffect = 'move';
+      });
+
+      li.addEventListener('dragleave', (e) => {
+        // remove visual indicators when leaving
+        li.classList.remove('drop-before', 'drop-after');
+      });
+
+      li.addEventListener('drop', async (e) => {
+        e.preventDefault();
+        const draggedId = e.dataTransfer.getData('text/plain');
+        if (!draggedId) return;
+        // find dragged and target elements
+        const draggedEl = Array.from(tileList.children).find(n => n.dataset.id === draggedId);
+        const targetEl = e.currentTarget;
+        if (!draggedEl || !targetEl || draggedEl === targetEl) {
+          // cleanup and exit
+          Array.from(tileList.children).forEach(n => n.classList.remove('drop-before', 'drop-after'));
+          return;
+        }
+        // insert based on indicator
+        if (targetEl.classList.contains('drop-before')) {
+          tileList.insertBefore(draggedEl, targetEl);
+        } else {
+          tileList.insertBefore(draggedEl, targetEl.nextSibling);
+        }
+        // clear indicators
+        Array.from(tileList.children).forEach(n => n.classList.remove('drop-before', 'drop-after'));
+        // build new order
+        const newOrder = Array.from(tileList.children).map(node => {
+          const id = node.dataset.id;
+          const span = node.querySelector('span');
+          const title = span ? span.textContent : '';
+          return { id, title };
+        });
+        const rr = await api.reorderTiles(state.currentStory, newOrder);
+        if (!rr || !rr.ok) return alert(rr && rr.error ? rr.error : 'Reorder failed');
+        await refreshTiles();
+      });
+
+      tileList.appendChild(li);
+    }
+  } catch (e) {
+    console.error('refreshTiles error', e);
+  }
+}
+
+// create tile handler
+if (createTileBtn) {
+  createTileBtn.addEventListener('click', async () => {
+    if (!state.currentStory) return alert('Open a story first');
+    const title = (newTileTitle && newTileTitle.value) ? newTileTitle.value.trim() : '';
+    const res = await api.createTile(state.currentStory, title, '');
+    if (!res || !res.ok) return alert(res && res.error ? res.error : 'Create tile failed');
+    if (newTileTitle) newTileTitle.value = '';
+    await refreshTiles();
+    // open newly created tile
+    const got = await api.getTile(state.currentStory, res.id);
+    if (got && got.ok) {
+      state.currentView = { type: 'tile', id: res.id };
+      editor.value = got.content || '';
+      setEditorEnabled(true);
+      renderPreview();
+    }
+  });
+}
 
 /* Improved preview rendering: render markdown then wrap ALL entity occurrences (multi-match, multi-word, longest-first).
    NOTE: renderPreview now renders markdown even when no story is opened so the right pane always shows live preview. */

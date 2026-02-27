@@ -114,3 +114,30 @@ a.entity-loc{color:var(--accent-green);text-decoration:underline;cursor:pointer}
   border-radius: 4px;
   padding: 2px 4px;
 }
+
+/* Tiles drag-and-drop insertion indicators */
+.tile-item {
+  position: relative;
+}
+.tile-item.drop-before::before,
+.tile-item.drop-after::after {
+  content: '';
+  position: absolute;
+  left: 0;
+  right: 0;
+  height: 2px;
+  background: var(--accent-blue);
+  transform: translateY(-50%);
+  pointer-events: none;
+}
+.tile-item.drop-before::before {
+  top: 0;
+}
+.tile-item.drop-after::after {
+  bottom: 0;
+}
+
+/* subtle hover state for tile items */
+.tile-item:hover {
+  background: rgba(30,144,255,0.03);
+}
