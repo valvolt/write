@@ -10,14 +10,20 @@
 <body>
   <div id="app">
     <aside id="sidebar">
-      <div class="stories">
-        <h3>Stories</h3>
-        <div class="story-controls">
-          <input id="newStoryName" placeholder="New story name" />
-          <button id="createStoryBtn">Create</button>
+      <div id="storiesPane" class="pane">
+        <div class="stories">
+          <h3>Stories</h3>
+          <div class="story-controls">
+            <input id="newStoryName" placeholder="New story name" />
+            <button id="createStoryBtn">Create</button>
+          </div>
+          <ul id="storyList"></ul>
         </div>
-        <ul id="storyList"></ul>
+      </div>
 
+      <div class="splitter" data-split="stories-tiles" role="separator" aria-orientation="horizontal" title="Drag to resize"></div>
+
+      <div id="tilesPane" class="pane">
         <!-- Tiles: per-story small text chunks -->
         <div class="tiles" id="tilesSection" style="margin-top:12px;display:none">
           <h4 style="margin:6px 0 8px 0">Tiles</h4>
@@ -30,15 +36,20 @@
       </div>
 
       <div class="entities">
-        <h3>Highlights <select id="hlSort"><option value="alpha">A→Z</option><option value="count">By count</option></select></h3>
+      <div class="splitter" data-split="tiles-highlights" role="separator" aria-orientation="horizontal" title="Drag to resize"></div>
 
-        <!-- Add highlight via input -->
-        <div class="highlight-add" style="display:flex;gap:8px;margin-bottom:8px">
-          <input id="newHighlightInput" placeholder="New highlight name" />
-          <button id="createHighlightBtn">Add</button>
+      <div id="highlightsPane" class="pane">
+        <div class="entities">
+          <h3>Highlights <select id="hlSort"><option value="alpha">A→Z</option><option value="count">By count</option></select></h3>
+
+          <!-- Add highlight via input -->
+          <div class="highlight-add" style="display:flex;gap:8px;margin-bottom:8px">
+            <input id="newHighlightInput" placeholder="New highlight name" />
+            <button id="createHighlightBtn">Add</button>
+          </div>
+
+          <ul id="highlightList"></ul>
         </div>
-
-        <ul id="highlightList"></ul>
       </div>
 
       <div class="story-actions">

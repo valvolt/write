@@ -21,6 +21,28 @@ aside#sidebar{
   gap:12px;
 }
 .stories, .entities, .story-actions { background:transparent; }
+
+/* Sidebar panes and splitters */
+.pane {
+  display: flex;
+  flex-direction: column;
+  overflow: auto;
+  min-height: 40px;
+}
+
+/* thin draggable splitter between panes */
+.splitter {
+  height: 8px;
+  background: transparent;
+  cursor: row-resize;
+  margin: 4px 0;
+  border-radius: 4px;
+  transition: background 120ms;
+}
+.splitter:hover { background: rgba(0,0,0,0.04); }
+body.resizing { user-select: none; }
+/* ensure sidebar keeps column flow (already set but reinforce) */
+aside#sidebar { display: flex; flex-direction: column; }
 .stories h3, .entities h3 { margin:6px 0;font-size:14px;display:flex;align-items:center;gap:8px;justify-content:space-between; }
 .story-controls{display:flex;gap:8px;margin-bottom:8px}
 .story-controls input{flex:1;padding:6px;border:1px solid #ddd;border-radius:4px}
@@ -33,7 +55,7 @@ aside#sidebar{
 #storyList li.story-item .story-delete{padding:6px 8px;border-radius:4px;border:1px solid #ddd;background:#f2f3f7;font-size:13px;line-height:1;cursor:pointer}
 #storyList li.story-item .story-delete:hover{background:#eef4ff}
 
-#storyList, #highlightList, #locationList{list-style:none;margin:0;padding:0;max-height:220px;overflow:auto}
+#storyList, #highlightList, #locationList{list-style:none;margin:0;padding:0;overflow:auto;min-height:40px}
 #storyList li, #highlightList li, #locationList li{padding:6px;border-radius:4px;cursor:pointer}
 #storyList li:hover, #highlightList li:hover, #locationList li:hover{background:#f5f7ff}
 

@@ -745,21 +745,38 @@ async function saveMainText() {
 
   // Avoid unnecessary saves that reset content/cursor:
   // Compare the current in-editor description with the one stored on disk for this entity.
-  // If identical (including trailing newlines), skip saving entirely.
+  // If identical (including trailing newlines) and no rename occurred, skip saving entirely.
   try {
     const storedMap = parseEntitySections(raw);
-    const storedEntry = storedMap[editedTitle];
-    const storedDesc = storedEntry ? storedEntry.desc : '';
-    if (storedDesc === editedDesc) {
-      // nothing changed — skip network call and avoid touching editor/state
-      console.debug('[debug] saveMainText: no changes detected for', editedTitle, '- skipping save');
-      return;
+    const originalName = state.currentView && state.currentView.name ? state.currentView.name : null;
+
+    // If the title was not changed and the stored description matches the edited one, skip save.
+    if (originalName && editedTitle === originalName) {
+      const storedEntry = storedMap[originalName];
+      const storedDesc = storedEntry ? storedEntry.desc : '';
+      if (storedDesc === editedDesc) {
+        console.debug('[debug] saveMainText: no changes detected for', editedTitle, '- skipping save');
+        return;
+      }
+    }
+
+    // If no original name available, fall back to checking by editedTitle.
+    // This is a conservative no-op check: only skip if an existing section with the
+    // same title already has an identical description.
+    if (!originalName && editedTitle) {
+      const storedEntry2 = storedMap[editedTitle];
+      const storedDesc2 = storedEntry2 ? storedEntry2.desc : '';
+      if (storedDesc2 === editedDesc) {
+        console.debug('[debug] saveMainText: no changes detected for', editedTitle, '- skipping save');
+        return;
+      }
     }
   } catch (e) {
     console.warn('saveMainText: compare failed, proceeding to save', e);
   }
 
   // find index by original name (supports renames), otherwise by title, otherwise append
+  // We'll compute both indices and handle rename/collision deterministically.
   let idx = -1;
   if (state.currentView && state.currentView.name) {
     idx = arr.findIndex(s => s.title === state.currentView.name);
@@ -775,7 +792,31 @@ async function saveMainText() {
     arr[idx] = { title: editedTitle, desc: editedDesc };
   }
 
-  // ensure unique titles (if a rename collided with another section, merge by keeping the edited one and removing duplicates)
+  const originalName = state.currentView && state.currentView.name ? state.currentView.name : null;
+  const idxOriginal = originalName ? arr.findIndex(s => s.title === originalName) : -1;
+  const idxEdited = arr.findIndex(s => s.title === editedTitle);
+
+  if (idxOriginal !== -1) {
+    if (idxEdited !== -1 && idxEdited !== idxOriginal) {
+      // Rename collided with an existing section. Keep the edited one and remove the original.
+      // Overwrite the existing target with edited content, then remove original.
+      arr[idxEdited] = { title: editedTitle, desc: editedDesc };
+      // If original comes after edited in array and indices shifted, find and remove by title to be safe
+      const remIdx = arr.findIndex(s => s.title === originalName);
+      if (remIdx !== -1) arr.splice(remIdx, 1);
+    } else {
+      // No collision: update original entry (rename or update description)
+      arr[idxOriginal] = { title: editedTitle, desc: editedDesc };
+    }
+  } else if (idxEdited !== -1) {
+    // Original not found but an entry with editedTitle exists — update it
+    arr[idxEdited] = { title: editedTitle, desc: editedDesc };
+  } else {
+    // append new section
+    arr.push({ title: editedTitle, desc: editedDesc });
+  }
+
+  // ensure unique titles (dedupe any accidental duplicates, keeping the first occurrence)
   const seen = new Set();
   const merged = [];
   for (const s of arr) {
@@ -1844,5 +1885,71 @@ preview.addEventListener('contextmenu', (ev) => {
   }
 })();
 
-// expose for debugging
+ // expose for debugging
 window._storyWriter = { state, refreshStories, openStory, saveMainText };
+
+(function() {
+  // Sidebar splitter: allow resizing Stories / Tiles / Highlights panes vertically.
+  try {
+    const sidebar = document.getElementById('sidebar');
+    const storiesPane = document.getElementById('storiesPane');
+    const tilesPane = document.getElementById('tilesPane');
+    const highlightsPane = document.getElementById('highlightsPane');
+    const splitter12 = document.querySelector('.splitter[data-split="stories-tiles"]');
+    const splitter23 = document.querySelector('.splitter[data-split="tiles-highlights"]');
+
+    if (sidebar && storiesPane && tilesPane && highlightsPane && splitter12 && splitter23) {
+      const setDefaultHeights = () => {
+        const h = sidebar.clientHeight || sidebar.offsetHeight;
+        const third = Math.max(80, Math.floor(h / 3));
+        storiesPane.style.height = third + 'px';
+        tilesPane.style.height = third + 'px';
+        highlightsPane.style.height = Math.max(80, h - 2 * third) + 'px';
+      };
+      // initial sizing
+      setDefaultHeights();
+      // recompute on window resize to keep sensible layout
+      window.addEventListener('resize', setDefaultHeights);
+
+      function setupSplitter(splitter, upperPane, lowerPane) {
+        let startY = 0;
+        let startUpperH = 0;
+        let startLowerH = 0;
+        let dragging = false;
+
+        const onMouseMove = (e) => {
+          if (!dragging) return;
+          const dy = e.clientY - startY;
+          const newUpper = Math.max(60, startUpperH + dy);
+          const newLower = Math.max(60, startLowerH - dy);
+          upperPane.style.height = newUpper + 'px';
+          lowerPane.style.height = newLower + 'px';
+        };
+
+        const onMouseUp = () => {
+          if (!dragging) return;
+          dragging = false;
+          document.body.classList.remove('resizing');
+          document.removeEventListener('mousemove', onMouseMove);
+          document.removeEventListener('mouseup', onMouseUp);
+        };
+
+        splitter.addEventListener('mousedown', (e) => {
+          e.preventDefault();
+          dragging = true;
+          startY = e.clientY;
+          startUpperH = upperPane.getBoundingClientRect().height;
+          startLowerH = lowerPane.getBoundingClientRect().height;
+          document.body.classList.add('resizing');
+          document.addEventListener('mousemove', onMouseMove);
+          document.addEventListener('mouseup', onMouseUp);
+        });
+      }
+
+      setupSplitter(splitter12, storiesPane, tilesPane);
+      setupSplitter(splitter23, tilesPane, highlightsPane);
+    }
+  } catch (e) {
+    console.warn('sidebar splitter init failed', e);
+  }
+})();
